@@ -6,6 +6,8 @@
   "scripts": {
     "test": "node --test tests/*.test.js",
     "vendor": "node scripts/vendor.js",
+    "build:artifact": "node scripts/build-artifact.js",
+    "build:site": "rm -rf _site && mkdir -p _site && cp -R index.html css js assets vendor _site/",
     "serve": "npx http-server -c-1 -p 8080 ."
   },
   "devDependencies": {

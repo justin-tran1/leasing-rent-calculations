@@ -12,7 +12,17 @@ To serve it locally instead:
 npm run serve   # http://localhost:8080
 ```
 
-The page also runs as-is from any static host, such as GitHub Pages or SharePoint.
+The page also runs as-is from any static host, such as SharePoint.
+
+### On GitHub Pages
+
+Every push to `main` runs the tests and, when they pass, deploys the calculator to GitHub Pages at <https://justin-tran1.github.io/leasing-rent-calculations/> (workflow: `.github/workflows/pages.yml`).
+
+One-time setup by a repository admin: **Settings > Pages > Build and deployment > Source: GitHub Actions**. Until that is set, the deploy job fails while the test job still runs. A GitHub Pages site is public, so anyone with the link can open it.
+
+### As a claude.ai artifact
+
+`npm run build:artifact` writes `dist/cbre-lease-rent-calculator.html`, the calculator as one self-contained page for publishing as a claude.ai artifact. Chart.js and ExcelJS load from jsDelivr at the vendored versions. Inside claude.ai, Export to Excel, Download PNG and Save scenario each ask the viewer to confirm the save. Publish the artifact with the `downloads` capability so those saves work.
 
 ## What you can enter for each option
 
@@ -77,13 +87,17 @@ js/app.js           UI state and wiring
 js/logos.js         CBRE logos embedded for the Excel export (generated)
 assets/             CBRE logos
 vendor/             Chart.js and ExcelJS browser builds with licences
-tests/              Node tests for the engine, chart configs and the Excel export
+scripts/            vendor refresh and claude.ai artifact build
+tests/              Node tests for the engine, chart configs, Excel export and artifact build
+.github/workflows/  tests on every PR; deploy to GitHub Pages from main
 ```
 
 ## Development
 
 ```bash
 npm install
-npm test          # engine, chart config and Excel export tests
-npm run vendor    # refresh vendor/ and js/logos.js after upgrading Chart.js or ExcelJS
+npm test                # engine, chart config, Excel export and artifact build tests
+npm run vendor          # refresh vendor/ and js/logos.js after upgrading Chart.js or ExcelJS
+npm run build:artifact  # dist/cbre-lease-rent-calculator.html for claude.ai
+npm run build:site      # _site/ as deployed to GitHub Pages
 ```
