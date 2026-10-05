@@ -600,6 +600,7 @@
     clearTimeout(removeTimer);
     removeTimer = null;
     b.textContent = 'Remove option';
+    b.removeAttribute('aria-label');
     b.classList.remove('btn--danger');
   }
   $('#btn-remove').addEventListener('blur', () => { if (removeTimer) disarmRemove(); });
@@ -608,7 +609,9 @@
     const opt = activeOption();
     if (!removeTimer) {
       const b = $('#btn-remove');
-      b.textContent = `Click again to remove ${displayName(opt)}`;
+      // A short visible label fits phone widths; the name goes to screen readers.
+      b.textContent = 'Click again to remove';
+      b.setAttribute('aria-label', `Click again to remove ${displayName(opt)}`);
       b.classList.add('btn--danger');
       removeTimer = setTimeout(disarmRemove, 5000);
       return;

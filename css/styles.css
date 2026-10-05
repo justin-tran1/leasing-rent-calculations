@@ -121,9 +121,11 @@ button, input, select { font: inherit; color: inherit; }
   display: flex; align-items: center; justify-content: space-between; gap: 12px 20px;
   flex-wrap: wrap; margin-bottom: 16px;
 }
-.card__meta { margin: 0; color: var(--muted); font-size: 14px; }
+.card__meta { margin: 0; color: var(--muted); font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
 
-.settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+/* min-width/max-width let long option names shrink inside the selects
+   instead of widening the page on phones. */
+.settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; min-width: 0; max-width: 100%; }
 
 /* ---------------------------------------------------------------- fields */
 
@@ -148,6 +150,7 @@ input:focus, select:focus { border-color: var(--cbre-green); }
 input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 input[aria-invalid="true"] { border-color: var(--negative); background: var(--negative-bg); }
 .field--inline select, .field--inline input { width: auto; }
+.field--inline select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
 
 .input-group { display: flex; align-items: stretch; min-width: 0; }
 .input-group > input { flex: 1 1 auto; min-width: 0; border-radius: 0; }
@@ -322,7 +325,7 @@ input[aria-invalid="true"] { border-color: var(--negative); background: var(--ne
 }
 .swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--cbre-green); }
 
-.chart-note { margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+.chart-note { margin: 0 0 10px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .chart-area { display: grid; gap: 16px; }
 .chart-area.chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .chart-box { margin: 0; position: relative; min-width: 0; border: 1px solid var(--rule); border-radius: var(--radius); padding: 12px; }
@@ -339,6 +342,7 @@ input[aria-invalid="true"] { border-color: var(--negative); background: var(--ne
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 20;
   max-width: calc(100% - 32px); padding: 10px 16px; border-radius: var(--radius);
   background: var(--dark-green); color: #fff; font-size: 14px; box-shadow: 0 6px 20px rgba(1, 42, 45, 0.25);
+  overflow-wrap: anywhere;
 }
 .toast--error { background: var(--negative); }
 
