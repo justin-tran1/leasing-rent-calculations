@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CBRE Lease Rent Calculator</title>
+  <meta name="description" content="Compare lease options month by month: base rent, OpEx, free rent, parking and security deposit, with charts and Excel export.">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <span class="brand">
+        <img src="assets/cbre-logo-white.png" alt="CBRE" width="88" height="22">
+      </span>
+      <span class="topbar__divider" aria-hidden="true"></span>
+      <span class="topbar__app">Lease rent calculator</span>
+      <nav class="topbar__actions" aria-label="File">
+        <button type="button" id="btn-save" class="btn btn--on-dark">Save scenario</button>
+        <label class="btn btn--on-dark" for="file-open">Open scenario</label>
+        <input type="file" id="file-open" class="visually-hidden" accept=".json,application/json">
+        <button type="button" id="btn-export" class="btn btn--accent">Export to Excel</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Lease analysis</p>
+      <h1>Compare lease options month by month</h1>
+      <p class="lead">Enter each proposal's rent, OpEx, free rent and parking. The calculator builds the monthly schedule, totals the cost of every option and charts them side by side.</p>
+    </section>
+
+    <!-- Lease options -->
+    <section class="card" aria-labelledby="h-options">
+      <div class="card__head">
+        <h2 id="h-options">Lease options</h2>
+        <div class="settings">
+          <label class="field field--inline">
+            <span class="field__label">Currency</span>
+            <select id="set-currency">
+              <option value="$">$</option>
+              <option value="£">£</option>
+              <option value="€">€</option>
+              <option value="¥">¥</option>
+            </select>
+          </label>
+          <label class="field field--inline">
+            <span class="field__label">Area unit</span>
+            <select id="set-area">
+              <option value="SF">SF</option>
+              <option value="SM">SM</option>
+            </select>
+          </label>
+          <label class="field field--inline">
+            <span class="field__label">Discount rate for NPV</span>
+            <span class="input-group input-group--sm">
+              <input id="set-discount" type="number" step="0.25" min="0" max="50" inputmode="decimal">
+              <span class="input-group__suffix">%</span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="tabs" id="option-tabs" role="tablist" aria-label="Lease options"></div>
+
+      <form id="option-form" class="option-form" novalidate autocomplete="off" role="tabpanel" aria-labelledby="">
+        <div class="form-grid">
+          <fieldset class="group">
+            <legend>Premises and term</legend>
+            <label class="field">
+              <span class="field__label">Option name</span>
+              <input name="name" type="text" maxlength="60" required>
+            </label>
+            <label class="field">
+              <span class="field__label">Size of the space</span>
+              <span class="input-group">
+                <input name="size" type="number" min="0" step="1" inputmode="decimal" data-kind="number" required>
+                <span class="input-group__suffix" data-area></span>
+              </span>
+              <span class="field__error" data-error-for="size"></span>
+            </label>
+            <label class="field">
+              <span class="field__label">Commencement date</span>
+              <input name="commencement" type="date" required>
+              <span class="field__error" data-error-for="commencement"></span>
+            </label>
+            <div class="field">
+              <label class="field__label" for="f-term">Length of term</label>
+              <span class="input-group">
+                <input id="f-term" name="termValue" type="number" min="0" step="any" inputmode="decimal" data-kind="number">
+                <select name="termUnit" aria-label="Term unit">
+                  <option value="months">Months</option>
+                  <option value="years">Years</option>
+                </select>
+              </span>
+            </div>
+            <label class="field">
+              <span class="field__label">Ending date</span>
+              <input name="expiration" type="date" required>
+              <span class="field__hint">Set from commencement and term. Edit it to use a specific date.</span>
+              <span class="field__error" data-error-for="expiration"></span>
+            </label>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Base rent</legend>
+            <div class="field">
+              <label class="field__label" for="f-rate">Base rent (lease rate)</label>
+              <span class="input-group">
+                <span class="input-group__prefix" data-cur></span>
+                <input id="f-rate" name="baseRate" data-decimals="2" type="number" min="0" step="0.01" inputmode="decimal" data-kind="number">
+                <select name="rateBasis" aria-label="Rate basis" data-basis-select></select>
+              </span>
+              <span class="field__error" data-error-for="baseRate"></span>
+            </div>
+            <div class="field">
+              <span class="field__label" id="lbl-ratetype">Rate type</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="lbl-ratetype">
+                <label><input type="radio" name="rateType" value="NNN"><span>NNN</span></label>
+                <label><input type="radio" name="rateType" value="MG"><span>Modified Gross</span></label>
+                <label><input type="radio" name="rateType" value="FS"><span>Full Service</span></label>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field__label" for="f-esc">Annual escalation</label>
+              <span class="input-group">
+                <input id="f-esc" name="escalation" data-decimals="1" type="number" step="0.1" inputmode="decimal" data-kind="number">
+                <select name="escalationType" aria-label="Escalation type">
+                  <option value="pct">% per year</option>
+                  <option value="fixed" data-fixed-label>Fixed amount per year</option>
+                </select>
+              </span>
+              <span class="field__hint">Applied on each lease anniversary. Default 3.0%.</span>
+            </div>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Operating expenses (OpEx)</legend>
+            <div class="field">
+              <label class="field__label" for="f-opex">OpEx</label>
+              <span class="input-group">
+                <span class="input-group__prefix" data-cur></span>
+                <input id="f-opex" name="opex" data-decimals="2" type="number" min="0" step="0.01" inputmode="decimal" data-kind="number">
+                <span class="input-group__suffix" data-rate-unit></span>
+              </span>
+              <span class="field__error" data-error-for="opex"></span>
+            </div>
+            <div class="field">
+              <label class="field__label" for="f-opexinc">Annual OpEx increase</label>
+              <span class="input-group">
+                <input id="f-opexinc" name="opexIncrease" data-decimals="1" type="number" step="0.1" inputmode="decimal" data-kind="number">
+                <span class="input-group__suffix">%</span>
+              </span>
+              <span class="field__hint">Default 3.5%.</span>
+            </div>
+            <div class="field" data-show="rateType:MG">
+              <label class="field__label" for="f-mgshare">Tenant share of OpEx</label>
+              <span class="input-group">
+                <input id="f-mgshare" name="mgTenantShare" type="number" min="0" max="100" step="1" inputmode="decimal" data-kind="number">
+                <span class="input-group__suffix">%</span>
+              </span>
+            </div>
+            <label class="check" data-show="rateType:MG,FS">
+              <input type="checkbox" name="baseYear">
+              <span>Tenant pays OpEx increases over the base year</span>
+            </label>
+            <p class="note" id="opex-note"></p>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Free rent</legend>
+            <label class="field" data-show="freePlacement:start,end">
+              <span class="field__label">Months of free rent</span>
+              <input name="freeMonths" type="number" min="0" step="0.5" inputmode="decimal" data-kind="number">
+              <span class="field__error" data-error-for="freeMonths"></span>
+            </label>
+            <label class="field">
+              <span class="field__label">When</span>
+              <select name="freePlacement">
+                <option value="start">Start of term</option>
+                <option value="end">End of term</option>
+                <option value="custom">Custom months</option>
+              </select>
+            </label>
+            <label class="field" data-show="freePlacement:custom">
+              <span class="field__label">Free months</span>
+              <input name="freeCustom" type="text" placeholder="1-3, 13">
+              <span class="field__hint">Lease month numbers or ranges, separated by commas.</span>
+              <span class="field__error" data-error-for="freeCustom"></span>
+            </label>
+            <label class="field">
+              <span class="field__label">Free rent covers</span>
+              <select name="freeAppliesTo">
+                <option value="base">Base rent only</option>
+                <option value="gross">Base rent and OpEx</option>
+                <option value="all">Base rent, OpEx and parking</option>
+              </select>
+            </label>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Parking</legend>
+            <label class="field">
+              <span class="field__label">Number of spaces</span>
+              <input name="parkingSpaces" type="number" min="0" step="1" inputmode="numeric" data-kind="number">
+              <span class="field__error" data-error-for="parkingSpaces"></span>
+            </label>
+            <div class="field">
+              <label class="field__label" for="f-park">Cost per space</label>
+              <span class="input-group">
+                <span class="input-group__prefix" data-cur></span>
+                <input id="f-park" name="parkingRate" data-decimals="2" type="number" min="0" step="1" inputmode="decimal" data-kind="number">
+                <span class="input-group__suffix">/month</span>
+              </span>
+            </div>
+            <div class="field">
+              <label class="field__label" for="f-parkinc">Annual parking increase</label>
+              <span class="input-group">
+                <input id="f-parkinc" name="parkingIncrease" data-decimals="1" type="number" step="0.1" inputmode="decimal" data-kind="number">
+                <span class="input-group__suffix">%</span>
+              </span>
+            </div>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Security deposit</legend>
+            <div class="field">
+              <span class="field__label" id="lbl-deposit">Based on</span>
+              <div class="stack-radio" role="radiogroup" aria-labelledby="lbl-deposit">
+                <label class="check"><input type="radio" name="depositBasis" value="first"><span>First month's base rent</span></label>
+                <label class="check"><input type="radio" name="depositBasis" value="last"><span>Last month's base rent</span></label>
+                <label class="check"><input type="radio" name="depositBasis" value="none"><span>No security deposit</span></label>
+              </div>
+            </div>
+            <label class="field" data-show="depositBasis:first,last">
+              <span class="field__label">Number of months</span>
+              <input name="depositMonths" type="number" min="0" step="1" inputmode="decimal" data-kind="number">
+              <span class="field__error" data-error-for="depositMonths"></span>
+            </label>
+            <div class="deposit-output" aria-live="polite">
+              <span class="deposit-output__label">Security deposit</span>
+              <span class="deposit-output__value" id="deposit-value">-</span>
+            </div>
+          </fieldset>
+        </div>
+
+        <div class="option-summary" id="option-summary" aria-live="polite"></div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn--secondary" id="btn-duplicate">Duplicate option</button>
+          <button type="button" class="btn btn--quiet" id="btn-remove">Remove option</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Comparison -->
+    <section class="card" aria-labelledby="h-compare">
+      <div class="card__head">
+        <h2 id="h-compare">Comparison</h2>
+        <p class="card__meta" id="compare-meta"></p>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table data-table--compare" id="compare-table"></table>
+      </div>
+    </section>
+
+    <!-- Charts -->
+    <section class="card" aria-labelledby="h-charts">
+      <div class="card__head">
+        <h2 id="h-charts">Charts</h2>
+        <button type="button" class="btn btn--secondary" id="btn-png">Download PNG</button>
+      </div>
+
+      <div class="chart-controls">
+        <label class="field field--inline">
+          <span class="field__label">Show</span>
+          <select id="c-metric"></select>
+        </label>
+        <div class="field field--inline">
+          <span class="field__label" id="lbl-layout">Layout</span>
+          <div class="segmented segmented--sm" role="radiogroup" aria-labelledby="lbl-layout">
+            <label><input type="radio" name="c-layout" value="combined"><span>All on one chart</span></label>
+            <label><input type="radio" name="c-layout" value="separate"><span>Separate charts</span></label>
+          </div>
+        </div>
+        <label class="field field--inline">
+          <span class="field__label">Chart type</span>
+          <select id="c-type"></select>
+        </label>
+        <label class="field field--inline" data-chart-show="monthly">
+          <span class="field__label">Time axis</span>
+          <select id="c-align">
+            <option value="leaseMonth">Lease month</option>
+            <option value="calendar">Calendar month</option>
+          </select>
+        </label>
+      </div>
+
+      <details class="chart-style" id="chart-style">
+        <summary>Customize chart</summary>
+        <div class="chart-style__body">
+          <div class="chart-style__grid">
+            <label class="field">
+              <span class="field__label">Chart title</span>
+              <input id="c-title" type="text" maxlength="80" placeholder="Default title">
+            </label>
+            <label class="field">
+              <span class="field__label">Colour theme</span>
+              <select id="c-preset"></select>
+            </label>
+            <label class="field">
+              <span class="field__label">Legend</span>
+              <select id="c-legend">
+                <option value="bottom">Bottom</option>
+                <option value="top">Top</option>
+                <option value="right">Right</option>
+                <option value="none">Hidden</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field__label">Height</span>
+              <select id="c-height">
+                <option value="compact">Compact</option>
+                <option value="standard">Standard</option>
+                <option value="tall">Tall</option>
+              </select>
+            </label>
+            <label class="field" data-chart-show="line">
+              <span class="field__label">Line width <output id="c-linewidth-out"></output></span>
+              <input id="c-linewidth" type="range" min="1" max="5" step="0.5">
+            </label>
+          </div>
+          <div class="chart-style__checks">
+            <label class="check"><input type="checkbox" id="c-labels"><span>Data labels</span></label>
+            <label class="check"><input type="checkbox" id="c-grid"><span>Gridlines</span></label>
+            <label class="check"><input type="checkbox" id="c-zero"><span>Start axis at zero</span></label>
+            <label class="check" data-chart-show="line"><input type="checkbox" id="c-markers"><span>Point markers</span></label>
+            <label class="check" data-chart-show="separate"><input type="checkbox" id="c-samescale"><span>Same scale on every chart</span></label>
+          </div>
+          <div class="colour-list" id="colour-list" aria-label="Series colours"></div>
+        </div>
+      </details>
+
+      <p class="chart-note" id="chart-note" hidden></p>
+      <div id="chart-area" class="chart-area"></div>
+    </section>
+
+    <!-- Schedule -->
+    <section class="card" aria-labelledby="h-schedule">
+      <div class="card__head">
+        <h2 id="h-schedule">Lease schedule</h2>
+        <div class="settings">
+          <label class="field field--inline">
+            <span class="field__label">Option</span>
+            <select id="s-option"></select>
+          </label>
+          <div class="segmented segmented--sm" role="radiogroup" aria-label="Schedule view">
+            <label><input type="radio" name="s-view" value="monthly"><span>Monthly</span></label>
+            <label><input type="radio" name="s-view" value="annual"><span>Annual</span></label>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap table-wrap--tall">
+        <table class="data-table data-table--schedule" id="schedule-table"></table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <img src="assets/cbre-logo-green.png" alt="CBRE" width="72" height="18">
+      <p>Estimates for comparison only. Confirm all figures against the lease documents. Escalations and OpEx increases apply on each lease anniversary.</p>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="vendor/chart.umd.min.js"></script>
+  <script src="js/logos.js"></script>
+  <script src="js/calc.js"></script>
+  <script src="js/format.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/excel.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
