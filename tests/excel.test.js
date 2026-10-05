@@ -52,7 +52,7 @@ async function roundTrip(wb) {
 test('workbook has comparison, monthly comparison and one sheet per option', async () => {
   const wb = await roundTrip(X.buildWorkbook(ExcelJS, payload()));
   assert.deepEqual(wb.worksheets.map((w) => w.name), [
-    'Comparison', 'Monthly comparison', 'Option A 100 Main St', "Option B King's Tower",
+    'Comparison', 'Monthly comparison', 'Option A 100 Main St', 'Option B King\u2019s Tower',
   ]);
 });
 
@@ -84,7 +84,7 @@ test('comparison sheet links to option sheets and ranks total cost', async () =>
   });
   assert.ok(costRow && rankRow);
   const b = ws.getCell(costRow, 3).value;
-  assert.match(b.formula, /^'Option B King''s Tower'!K\d+$/);
+  assert.match(b.formula, /^'Option B King\u2019s Tower'!K\d+$/);
   assert.ok(Math.abs(b.result - p.options[1].result.summary.totalCost) < 0.01);
   assert.equal(ws.getCell('B4').value, 0.08);
   const ranks = [ws.getCell(rankRow, 2).value.result, ws.getCell(rankRow, 3).value.result];
@@ -107,6 +107,21 @@ test('sheet names are sanitized and unique', () => {
   assert.equal(X.uniqueSheetName('A/B: [test]?', used), 'A B test');
   assert.equal(X.uniqueSheetName('A/B: [test]?', used), 'A B test (2)');
   assert.equal(X.uniqueSheetName('x'.repeat(40), used).length, 31);
+  // No straight apostrophes, so none can land at the start or end after truncation.
+  const longApostrophe = X.uniqueSheetName("Option C, 10 Main St, Children's Hospital", used);
+  assert.ok(!longApostrophe.includes("'") && longApostrophe.length <= 31);
+});
+
+test('options named History or with apostrophes export and reload cleanly', async () => {
+  const p = payload();
+  p.options[0].input = Object.assign({}, optionA, { name: 'History' });
+  p.options[1].input = Object.assign({}, optionB, { name: "Option C, 10 Main St, Children's Hospital" });
+  p.options.forEach((e) => { e.result = C.calculate(e.input, p.settings); });
+  const wb = await roundTrip(X.buildWorkbook(ExcelJS, p));
+  const names = wb.worksheets.map((w) => w.name);
+  assert.ok(names.includes('History (2)'));
+  const opt = wb.worksheets[3];
+  assert.equal(opt.pageSetup.printTitlesRow, '5:5', 'print titles survive a reload');
 });
 
 test('invalid options are skipped; no valid options throws', () => {

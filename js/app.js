@@ -12,6 +12,34 @@
   const STORAGE_KEY = 'cbre-lease-calculator.v1';
   const MAX_OPTIONS = 6;
   const PALETTE = Charts.PRESETS.cbre.colors;
+  const HEX = /^#[0-9a-fA-F]{6}$/;
+
+  // Allowed values for every enumerated setting. Saved or imported data is
+  // checked against these so a bad file can never break rendering.
+  const OPTION_ENUMS = {
+    rateType: Object.keys(F.RATE_TYPE_LABELS),
+    rateBasis: Object.keys(Calc.RATE_BASES),
+    termUnit: ['months', 'years'],
+    escalationType: ['pct', 'fixed'],
+    freePlacement: Object.keys(F.PLACEMENT_LABELS),
+    freeAppliesTo: Object.keys(F.APPLIES_LABELS),
+    depositBasis: Object.keys(F.DEPOSIT_LABELS),
+  };
+  const OPTION_NUMBERS = ['size', 'termValue', 'termMonths', 'baseRate', 'escalation', 'opex', 'opexIncrease',
+    'mgTenantShare', 'freeMonths', 'parkingSpaces', 'parkingRate', 'parkingIncrease', 'depositMonths'];
+  const OPTION_STRINGS = ['commencement', 'expiration', 'freeCustom'];
+  const CHART_ENUMS = {
+    metric: Object.keys(Charts.METRICS),
+    layout: ['combined', 'separate'],
+    type: Object.keys(Charts.TYPES),
+    align: ['leaseMonth', 'calendar'],
+    legend: ['bottom', 'top', 'right', 'none'],
+    height: ['compact', 'standard', 'tall'],
+    preset: Object.keys(Charts.PRESETS).concat('custom'),
+  };
+  const CHART_FLAGS = ['dataLabels', 'gridlines', 'beginAtZero', 'markers', 'sameScale'];
+  const CURRENCIES = ['$', '£', '€', '¥'];
+  const AREA_UNITS = ['SF', 'SM'];
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
@@ -44,6 +72,10 @@
     return 'o' + Math.random().toString(36).slice(2, 9);
   }
 
+  const round2 = (x) => Math.round(x * 100) / 100;
+  const round4 = (x) => Math.round(x * 1e4) / 1e4;
+  const pick = (v, allowed, dflt) => (allowed.includes(v) ? v : dflt);
+
   function localISO(d) {
     const pad = (x) => String(x).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -52,6 +84,10 @@
   function firstOfNextMonth() {
     const now = new Date();
     return localISO(new Date(now.getFullYear(), now.getMonth() + 1, 1));
+  }
+
+  function displayName(o) {
+    return String((o && o.name) || '').trim() || 'Untitled option';
   }
 
   function storageGet() {
@@ -85,6 +121,54 @@
     return String(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'chart';
   }
 
+  // Re-rendering replaces buttons (tabs, swatches). Controls that are rebuilt
+  // carry a data-focus-key so keyboard focus can return to the same control.
+  function currentFocusKey() {
+    const a = document.activeElement;
+    return a && a.dataset ? a.dataset.focusKey || null : null;
+  }
+
+  function restoreFocus(key) {
+    if (!key) return;
+    const node = $$('[data-focus-key]').find((n) => n.dataset.focusKey === key);
+    if (node && node !== document.activeElement) node.focus();
+  }
+
+  // ------------------------------------------------------ term syncing
+
+  function termMonthsOf(opt) {
+    return opt.termMonths > 0 ? opt.termMonths : Calc.termMonthsFromInput(opt.termValue, opt.termUnit);
+  }
+
+  // Ending date from commencement plus the exact term (fractions included).
+  // Terms past the 50-year cap leave the date alone; validation flags them.
+  function syncExpiration(opt) {
+    const months = termMonthsOf(opt);
+    if (!Calc.parseDate(opt.commencement) || !(months > 0)) return;
+    const exp = Calc.expirationFromTerm(opt.commencement, months);
+    if (exp) opt.expiration = exp;
+  }
+
+  function syncTermFromExpiration(opt) {
+    const t = Calc.termFromDates(opt.commencement, opt.expiration);
+    if (!(t.months > 0)) return;
+    opt.termMonths = round4(t.months);
+    if (t.fraction <= 1e-9 && opt.termUnit === 'years' && t.whole % 12 === 0) {
+      opt.termValue = t.whole / 12;
+    } else {
+      opt.termUnit = 'months';
+      opt.termValue = round2(t.months);
+    }
+  }
+
+  // Switching units only changes how the term is shown; the exact month
+  // count (and so the ending date) stays as it was.
+  function setTermUnit(opt, unit) {
+    const months = termMonthsOf(opt);
+    opt.termUnit = unit;
+    if (months > 0) opt.termValue = unit === 'years' ? round2(months / 12) : round2(months);
+  }
+
   // ------------------------------------------------------------- state
 
   function nextColor(options) {
@@ -103,11 +187,21 @@
 
   function makeOption(over) {
     const opt = Object.assign({}, Calc.DEFAULT_OPTION, { id: uid(), commencement: firstOfNextMonth() }, over);
+    if (!(opt.termMonths > 0)) opt.termMonths = Calc.termMonthsFromInput(opt.termValue, opt.termUnit);
     if (!over || !over.expiration) syncExpiration(opt);
     return opt;
   }
 
+  function defaultChart() {
+    return {
+      metric: 'monthlyTotal', layout: 'combined', type: 'line', align: 'leaseMonth', legend: 'bottom',
+      height: 'standard', dataLabels: false, gridlines: true, beginAtZero: true, markers: false,
+      sameScale: true, lineWidth: 2, title: '', preset: 'cbre', componentColors: Charts.COMPONENT_COLORS.slice(),
+    };
+  }
+
   function defaultState() {
+    // Placeholder example terms so a first-time visitor sees a comparison.
     const a = makeOption({
       name: 'Option A', color: PALETTE[0], size: 10000, baseRate: 38, rateType: 'NNN', opex: 14.5,
       freeMonths: 3, parkingSpaces: 20, parkingRate: 150, depositBasis: 'first', termValue: 5, termUnit: 'years',
@@ -120,40 +214,72 @@
       settings: { currency: '$', areaUnit: 'SF', discountRate: 8 },
       options: [a, b],
       activeId: a.id,
-      chart: {
-        metric: 'monthlyTotal', layout: 'combined', type: 'line', align: 'leaseMonth', legend: 'bottom',
-        height: 'standard', dataLabels: false, gridlines: true, beginAtZero: true, markers: false,
-        sameScale: true, lineWidth: 2, title: '', preset: 'cbre', componentColors: Charts.COMPONENT_COLORS.slice(),
-      },
+      chart: defaultChart(),
       schedule: { optionId: a.id, view: 'monthly' },
     };
   }
 
-  // Accepts saved or imported data and fills any gaps from the defaults.
+  function normalizeNumber(v) {
+    if (v === '' || v === null || v === undefined) return '';
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[, ]/g, ''));
+    return isFinite(n) ? n : '';
+  }
+
+  function normalizeOption(o, i) {
+    const d = Calc.DEFAULT_OPTION;
+    const src = o && typeof o === 'object' ? o : {};
+    const opt = Object.assign({}, d);
+    opt.id = typeof src.id === 'string' && src.id ? src.id.slice(0, 40) : uid();
+    opt.name = String(src.name === undefined || src.name === null ? `Option ${i + 1}` : src.name).slice(0, 60);
+    opt.color = HEX.test(src.color || '') ? src.color : PALETTE[i % PALETTE.length];
+    Object.keys(OPTION_ENUMS).forEach((k) => { opt[k] = pick(src[k], OPTION_ENUMS[k], d[k]); });
+    OPTION_NUMBERS.forEach((k) => { if (k in src) opt[k] = normalizeNumber(src[k]); });
+    OPTION_STRINGS.forEach((k) => { if (typeof src[k] === 'string') opt[k] = src[k].slice(0, 200); });
+    opt.baseYear = 'baseYear' in src ? !!src.baseYear : d.baseYear;
+    if (!(opt.termMonths > 0)) opt.termMonths = Calc.termMonthsFromInput(opt.termValue, opt.termUnit);
+    if (!Calc.parseDate(opt.expiration)) syncExpiration(opt);
+    return opt;
+  }
+
+  // Accepts saved or imported data and replaces anything unexpected with the
+  // defaults. Returns null when the data holds no lease options at all.
   function normalizeState(raw) {
-    const base = defaultState();
-    if (!raw || !Array.isArray(raw.options) || !raw.options.length) return null;
-    const options = raw.options.slice(0, MAX_OPTIONS).map((o, i) => {
-      const opt = Object.assign({}, Calc.DEFAULT_OPTION, o);
-      opt.id = typeof o.id === 'string' && o.id ? o.id : uid();
-      opt.name = String(opt.name || `Option ${i + 1}`).slice(0, 60);
-      if (!/^#[0-9a-fA-F]{6}$/.test(opt.color || '')) opt.color = PALETTE[i % PALETTE.length];
-      return opt;
-    });
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.options) || !raw.options.length) return null;
+    const options = raw.options.slice(0, MAX_OPTIONS).map(normalizeOption);
     const ids = new Set();
     options.forEach((o) => { if (ids.has(o.id)) o.id = uid(); ids.add(o.id); });
-    const state = {
-      settings: Object.assign({}, base.settings, raw.settings),
-      options,
-      activeId: options.some((o) => o.id === raw.activeId) ? raw.activeId : options[0].id,
-      chart: Object.assign({}, base.chart, raw.chart),
-      schedule: Object.assign({}, base.schedule, raw.schedule),
+
+    const rs = raw.settings && typeof raw.settings === 'object' ? raw.settings : {};
+    const rate = Number(rs.discountRate);
+    const settings = {
+      currency: pick(rs.currency, CURRENCIES, '$'),
+      areaUnit: pick(rs.areaUnit, AREA_UNITS, 'SF'),
+      discountRate: rs.discountRate !== '' && isFinite(rate) && rate >= 0 && rate <= 50 ? rate : 8,
     };
-    if (!Array.isArray(state.chart.componentColors) || state.chart.componentColors.length !== 3) {
-      state.chart.componentColors = Charts.COMPONENT_COLORS.slice();
+
+    const rc = raw.chart && typeof raw.chart === 'object' ? raw.chart : {};
+    const chart = defaultChart();
+    Object.keys(CHART_ENUMS).forEach((k) => { chart[k] = pick(rc[k], CHART_ENUMS[k], chart[k]); });
+    CHART_FLAGS.forEach((k) => { if (k in rc) chart[k] = !!rc[k]; });
+    const lw = Number(rc.lineWidth);
+    if (isFinite(lw) && lw >= 1 && lw <= 5) chart.lineWidth = lw;
+    if (typeof rc.title === 'string') chart.title = rc.title.slice(0, 80);
+    if (Array.isArray(rc.componentColors) && rc.componentColors.length === 3 && rc.componentColors.every((c) => HEX.test(c))) {
+      chart.componentColors = rc.componentColors.slice();
     }
-    if (!options.some((o) => o.id === state.schedule.optionId)) state.schedule.optionId = state.activeId;
-    return state;
+
+    const activeId = options.some((o) => o.id === raw.activeId) ? raw.activeId : options[0].id;
+    const rsch = raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {};
+    return {
+      settings,
+      options,
+      activeId,
+      chart,
+      schedule: {
+        optionId: options.some((o) => o.id === rsch.optionId) ? rsch.optionId : activeId,
+        view: pick(rsch.view, ['monthly', 'annual'], 'monthly'),
+      },
+    };
   }
 
   function loadState() {
@@ -177,54 +303,9 @@
     saveTimer = setTimeout(() => storageSet(JSON.stringify(state)), 250);
   }
 
-  // ------------------------------------------------------ term syncing
-
-  function syncExpiration(opt) {
-    const months = Calc.termMonthsFromInput(opt.termValue, opt.termUnit);
-    if (Calc.parseDate(opt.commencement) && months > 0) {
-      opt.expiration = Calc.expirationFromTerm(opt.commencement, months);
-    }
-  }
-
-  function syncTermFromExpiration(opt) {
-    const t = Calc.termFromDates(opt.commencement, opt.expiration);
-    if (!(t.months > 0)) return;
-    if (t.fraction > 1e-9) {
-      opt.termUnit = 'months';
-      opt.termValue = Math.round(t.months * 100) / 100;
-    } else if (opt.termUnit === 'years' && t.whole % 12 === 0) {
-      opt.termValue = t.whole / 12;
-    } else {
-      opt.termUnit = 'months';
-      opt.termValue = t.whole;
-    }
-  }
-
-  function convertTermUnit(opt, from, to) {
-    const v = Number(opt.termValue);
-    if (!isFinite(v) || v <= 0 || from === to) return;
-    opt.termValue = to === 'years' ? Math.round((v / 12) * 100) / 100 : Math.round(v * 12 * 100) / 100;
-  }
-
   // ------------------------------------------------------------- form
 
   const form = $('#option-form');
-
-  function fillForm(opt) {
-    Array.from(form.elements).forEach((input) => {
-      const name = input.name;
-      if (!name || !(name in opt)) return;
-      const v = opt[name];
-      if (input.type === 'radio') input.checked = String(v) === input.value;
-      else if (input.type === 'checkbox') input.checked = !!v;
-      else input.value = displayValue(input, v, opt);
-    });
-    form.setAttribute('aria-labelledby', `tab-${opt.id}`);
-    applyVisibility(opt);
-    updateOpexNote(opt);
-    $('#btn-remove').disabled = state.options.length <= 1;
-    $('#btn-duplicate').disabled = state.options.length >= MAX_OPTIONS;
-  }
 
   // Pads stored numbers to the field's decimals (3 -> 3.0, 38 -> 38.00) but
   // never rounds away precision the user typed.
@@ -235,6 +316,22 @@
     if (d === undefined || !isFinite(Number(v))) return v;
     const places = (String(v).split('.')[1] || '').length;
     return places < Number(d) ? Number(v).toFixed(Number(d)) : String(v);
+  }
+
+  function fillForm(opt) {
+    Array.from(form.elements).forEach((input) => {
+      const name = input.name;
+      if (!name || !(name in opt)) return;
+      const v = opt[name];
+      if (input.type === 'radio') input.checked = String(v) === input.value;
+      else if (input.type === 'checkbox') input.checked = !!v;
+      else input.value = displayValue(input, v, opt);
+    });
+    $('#option-panel').setAttribute('aria-labelledby', `tab-${opt.id}`);
+    applyVisibility(opt);
+    updateOpexNote(opt);
+    $('#btn-remove').disabled = state.options.length <= 1;
+    $('#btn-duplicate').disabled = state.options.length >= MAX_OPTIONS;
   }
 
   function applyVisibility(opt) {
@@ -273,14 +370,17 @@
     if (opt[name] === value) return;
 
     if (name === 'termUnit') {
-      convertTermUnit(opt, opt.termUnit, value);
-      opt.termUnit = value;
+      setTermUnit(opt, value);
       form.elements.termValue.value = opt.termValue;
     } else {
       opt[name] = value;
     }
 
-    if (name === 'commencement' || name === 'termValue') {
+    if (name === 'termValue') {
+      opt.termMonths = Calc.termMonthsFromInput(value, opt.termUnit);
+      syncExpiration(opt);
+      form.elements.expiration.value = opt.expiration;
+    } else if (name === 'commencement') {
       syncExpiration(opt);
       form.elements.expiration.value = opt.expiration;
     } else if (name === 'expiration') {
@@ -299,16 +399,31 @@
   form.addEventListener('change', onFormInput);
   form.addEventListener('submit', (e) => e.preventDefault());
 
+  // A cleared ending date is rebuilt from the term once the field loses
+  // focus (not while typing, which would fight the date picker).
+  form.elements.expiration.addEventListener('blur', () => {
+    const opt = activeOption();
+    if (Calc.parseDate(opt.expiration) || !(termMonthsOf(opt) > 0)) return;
+    syncExpiration(opt);
+    if (opt.expiration) {
+      form.elements.expiration.value = opt.expiration;
+      scheduleUpdate();
+    }
+  });
+
   function renderFieldErrors(result) {
     const errors = (result && result.errors) || {};
     $$('[data-error-for]', form).forEach((node) => {
       const key = node.dataset.errorFor;
-      node.textContent = errors[key] || '';
+      const msg = errors[key] || '';
+      if (node.textContent !== msg) node.textContent = msg;
       const input = form.elements[key];
-      if (input && input.setAttribute) {
-        if (errors[key]) input.setAttribute('aria-invalid', 'true');
-        else input.removeAttribute('aria-invalid');
-      }
+      if (!input || !input.setAttribute) return;
+      const ids = [input.dataset.hint, msg ? node.id : null].filter(Boolean);
+      if (ids.length) input.setAttribute('aria-describedby', ids.join(' '));
+      else input.removeAttribute('aria-describedby');
+      if (msg) input.setAttribute('aria-invalid', 'true');
+      else input.removeAttribute('aria-invalid');
     });
   }
 
@@ -319,25 +434,36 @@
       sub ? el('div', { class: 'stat__sub', text: sub }) : null);
   }
 
+  let lastSummary = '';
   function renderOptionSummary(opt, result) {
     const box = $('#option-summary');
-    box.textContent = '';
     const cur = state.settings.currency, unit = state.settings.areaUnit;
-    if (!result || !result.ok) {
+    const deposit = $('#deposit-value');
+    let depositText = '-';
+    let stats = null;
+    if (result && result.ok) {
+      const s = result.summary;
+      stats = [
+        ['Total lease cost', F.money(s.totalCost, cur, 0), F.termLabel(s.termMonths)],
+        ['Average monthly cost', F.money(s.avgMonthlyCost, cur, 0), `${F.money(s.startingMonthlyBase, cur, 0)} base rent in month 1`],
+        [`Effective rent per ${unit}/yr`, F.money(s.effectiveRentPsfYr, cur, 2), 'All-in, net of free rent'],
+        ['Free rent value', F.money(-s.totalFreeRent, cur, 0), F.freeRentLabel(opt, s.freeMonths)],
+      ];
+      depositText = opt.depositBasis === 'none' ? 'None' : F.money(s.securityDeposit, cur, 2);
+    }
+    if (deposit.textContent !== depositText) deposit.textContent = depositText;
+    // Skip the rebuild when nothing changed (typing elsewhere re-renders often).
+    const signature = JSON.stringify([opt.id, stats]);
+    if (signature === lastSummary) return;
+    lastSummary = signature;
+    box.textContent = '';
+    if (!stats) {
       box.className = 'option-summary option-summary--error';
       box.textContent = 'Complete the highlighted fields to see results for this option.';
-      $('#deposit-value').textContent = '-';
       return;
     }
     box.className = 'option-summary';
-    const s = result.summary;
-    box.append(
-      stat('Total lease cost', F.money(s.totalCost, cur, 0), F.termLabel(s.termMonths)),
-      stat('Average monthly cost', F.money(s.avgMonthlyCost, cur, 0), `${F.money(s.startingMonthlyBase, cur, 0)} base rent in month 1`),
-      stat(`Effective rent per ${unit}/yr`, F.money(s.effectiveRentPsfYr, cur, 2), 'All-in, net of free rent'),
-      stat('Free rent value', F.money(-s.totalFreeRent, cur, 0), F.freeRentLabel(opt, s.freeMonths)),
-    );
-    $('#deposit-value').textContent = opt.depositBasis === 'none' ? 'None' : F.money(s.securityDeposit, cur, 2);
+    stats.forEach(([l, v, sub]) => box.appendChild(stat(l, v, sub)));
   }
 
   // ------------------------------------------------------------- tabs
@@ -348,32 +474,36 @@
     state.options.forEach((o) => {
       const r = results.get(o.id);
       const selected = o.id === state.activeId;
-      const tab = el('button', {
+      bar.appendChild(el('button', {
         type: 'button', class: 'tab', role: 'tab', id: `tab-${o.id}`,
-        'aria-selected': selected ? 'true' : 'false', 'aria-controls': 'option-form',
-        tabindex: selected ? '0' : '-1', 'data-id': o.id,
+        'aria-selected': selected ? 'true' : 'false', 'aria-controls': 'option-panel',
+        tabindex: selected ? '0' : '-1', 'data-focus-key': `tab:${o.id}`,
         onclick: () => setActive(o.id),
       },
       el('span', { class: 'tab__dot', style: { background: o.color }, 'aria-hidden': 'true' }),
-      el('span', { class: 'tab__name', text: o.name || 'Untitled' }),
-      r && !r.ok ? el('span', { class: 'tab__warn', text: '!', title: 'Incomplete inputs', 'aria-label': 'Incomplete inputs' }) : null);
-      bar.appendChild(tab);
+      el('span', { class: 'tab__name', text: displayName(o) }),
+      r && !r.ok ? el('span', { class: 'tab__warn', text: '!', title: 'Incomplete inputs', 'aria-hidden': 'true' }) : null,
+      r && !r.ok ? el('span', { class: 'visually-hidden', text: ' (incomplete inputs)' }) : null));
     });
-    bar.appendChild(el('button', {
-      type: 'button', class: 'tab tab--add', disabled: state.options.length >= MAX_OPTIONS,
-      title: state.options.length >= MAX_OPTIONS ? `Up to ${MAX_OPTIONS} options` : 'Add a lease option',
-      onclick: addOption,
-    }, '+ Add option'));
+    const add = $('#btn-add');
+    add.disabled = state.options.length >= MAX_OPTIONS;
+    add.title = add.disabled ? `Up to ${MAX_OPTIONS} options` : 'Add a lease option';
   }
 
   $('#option-tabs').addEventListener('keydown', (e) => {
-    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const keys = ['ArrowRight', 'ArrowLeft', 'Home', 'End'];
+    if (!keys.includes(e.key)) return;
+    const n = state.options.length;
     const idx = state.options.findIndex((o) => o.id === state.activeId);
-    const next = (idx + (e.key === 'ArrowRight' ? 1 : -1) + state.options.length) % state.options.length;
+    let next = idx;
+    if (e.key === 'ArrowRight') next = (idx + 1) % n;
+    else if (e.key === 'ArrowLeft') next = (idx - 1 + n) % n;
+    else if (e.key === 'Home') next = 0;
+    else next = n - 1;
+    e.preventDefault();
     setActive(state.options[next].id);
     const tab = $(`#tab-${state.options[next].id}`);
     if (tab) tab.focus();
-    e.preventDefault();
   });
 
   function setActive(id) {
@@ -393,6 +523,7 @@
       commencement: from.commencement,
       termValue: from.termValue,
       termUnit: from.termUnit,
+      termMonths: termMonthsOf(from),
       baseRate: '',
       opex: from.opex,
     });
@@ -401,27 +532,29 @@
     form.elements.baseRate.focus();
   }
 
+  $('#btn-add').addEventListener('click', addOption);
+
   $('#btn-duplicate').addEventListener('click', () => {
     if (state.options.length >= MAX_OPTIONS) return;
     const from = activeOption();
     const copy = Object.assign({}, from, {
       id: uid(),
-      name: `${from.name} (copy)`.slice(0, 60),
+      name: `${displayName(from)} (copy)`.slice(0, 60),
       color: nextColor(state.options),
     });
     state.options.splice(state.options.indexOf(from) + 1, 0, copy);
     setActive(copy.id);
-    toast(`Duplicated ${from.name}.`);
+    toast(`Duplicated ${displayName(from)}.`);
   });
 
   $('#btn-remove').addEventListener('click', () => {
     if (state.options.length <= 1) return;
     const opt = activeOption();
-    if (!window.confirm(`Remove ${opt.name}? This cannot be undone.`)) return;
+    if (!window.confirm(`Remove ${displayName(opt)}? This cannot be undone.`)) return;
     const idx = state.options.indexOf(opt);
     state.options.splice(idx, 1);
     setActive(state.options[Math.max(0, idx - 1)].id);
-    toast(`Removed ${opt.name}.`);
+    toast(`Removed ${displayName(opt)}.`);
   });
 
   // ---------------------------------------------------------- settings
@@ -432,22 +565,33 @@
     $$('[data-area]').forEach((n) => { n.textContent = unit; });
     $$('[data-rate-unit]').forEach((n) => { n.textContent = `/${unit}/yr`; });
     const basis = form.elements.rateBasis;
-    const current = activeOption().rateBasis;
     basis.textContent = '';
     [['psf_yr', `/${unit}/yr`], ['psf_mo', `/${unit}/mo`], ['monthly', '/month total'], ['annual', '/year total']]
       .forEach(([v, t]) => basis.appendChild(el('option', { value: v, text: t })));
-    basis.value = current;
+    basis.value = activeOption().rateBasis;
+  }
+
+  function syncSettingsInputs() {
+    $('#set-currency').value = state.settings.currency;
+    $('#set-area').value = state.settings.areaUnit;
+    const disc = $('#set-discount');
+    disc.value = state.settings.discountRate;
+    disc.removeAttribute('aria-invalid');
+    $('#err-discount').textContent = '';
   }
 
   function bindSettings() {
     const cur = $('#set-currency'), area = $('#set-area'), disc = $('#set-discount');
-    cur.value = state.settings.currency;
-    area.value = state.settings.areaUnit;
-    disc.value = state.settings.discountRate;
-    cur.addEventListener('change', () => { state.settings.currency = cur.value; renderUnitLabels(); update(); });
-    area.addEventListener('change', () => { state.settings.areaUnit = area.value; renderUnitLabels(); update(); });
+    cur.addEventListener('change', () => { state.settings.currency = pick(cur.value, CURRENCIES, '$'); renderUnitLabels(); update(); });
+    area.addEventListener('change', () => { state.settings.areaUnit = pick(area.value, AREA_UNITS, 'SF'); renderUnitLabels(); update(); });
     disc.addEventListener('input', () => {
-      state.settings.discountRate = disc.value === '' ? 0 : Number(disc.value);
+      const v = Number(disc.value);
+      const ok = disc.value !== '' && isFinite(v) && v >= 0 && v <= 50;
+      $('#err-discount').textContent = ok ? '' : 'Enter a rate from 0% to 50%.';
+      if (ok) disc.removeAttribute('aria-invalid');
+      else disc.setAttribute('aria-invalid', 'true');
+      if (!ok) return;
+      state.settings.discountRate = v;
       scheduleUpdate();
     });
   }
@@ -468,9 +612,9 @@
     entries.forEach((e) => {
       head.appendChild(el('th', { scope: 'col' },
         el('span', { class: 'col-key', style: { background: e.opt.color }, 'aria-hidden': 'true' }),
-        e.opt.name || 'Untitled',
+        displayName(e.opt),
         lowest && lowest === e ? [el('br'), el('span', { class: 'badge' }, '✓ Lowest total cost')] : null,
-        e.r && !e.r.ok ? [el('br'), el('span', { class: 'badge', style: { background: '#FBEEEE', color: '#A03530' } }, '! Incomplete inputs')] : null));
+        e.r && !e.r.ok ? [el('br'), el('span', { class: 'badge badge--warn' }, '! Incomplete inputs')] : null));
     });
     table.appendChild(el('thead', null, head));
 
@@ -481,8 +625,7 @@
       const tr = el('tr', { class: opts && opts.strong ? 'row-strong' : null }, el('th', { scope: 'row', text: label }));
       entries.forEach((e) => {
         if (!e.r || !e.r.ok) { tr.appendChild(el('td', { class: 'cell-muted', text: '-' })); return; }
-        const v = get(e.r.summary, e.opt, e);
-        tr.appendChild(typeof v === 'object' && v !== null ? el('td', null, v) : el('td', { text: v }));
+        tr.appendChild(el('td', { text: get(e.r.summary, e.opt, e) }));
       });
       body.appendChild(tr);
     };
@@ -498,7 +641,7 @@
     row(`OpEx (${cur}/${unit}/yr)`, (s, o) => `${F.money(o.opex, cur)}, +${F.pct(o.opexIncrease)} per year`);
     row('Free rent', (s, o) => F.freeRentLabel(o, s.freeMonths));
     row('Parking', (s, o) => (Number(o.parkingSpaces) > 0
-      ? `${F.number(o.parkingSpaces)} spaces at ${F.money(o.parkingRate, cur, 0)}/month` : 'None'));
+      ? `${F.number(o.parkingSpaces)} spaces at ${F.money(o.parkingRate, cur)}/month` : 'None'));
 
     section('Cost over the term');
     row('Total base rent', (s) => F.money(s.totalBaseRent, cur, 0));
@@ -525,7 +668,7 @@
     table.appendChild(body);
 
     const meta = $('#compare-meta');
-    if (lowest) meta.textContent = `${lowest.opt.name} has the lowest total lease cost.`;
+    if (lowest) meta.textContent = `${displayName(lowest.opt)} has the lowest total lease cost.`;
     else if (valid.length === 1 && entries.length === 1) meta.textContent = 'Add an option to compare proposals side by side.';
     else meta.textContent = '';
   }
@@ -536,7 +679,7 @@
 
   function chartSeries() {
     return state.options
-      .map((o) => ({ id: o.id, name: o.name || 'Untitled', color: o.color, result: results.get(o.id) }))
+      .map((o) => ({ id: o.id, name: displayName(o), color: o.color, result: results.get(o.id) }))
       .filter((s) => s.result && s.result.ok);
   }
 
@@ -592,26 +735,27 @@
     renderColourList();
   }
 
-  function swatchRow(current, onPick) {
+  function swatchRow(current, onPick, rowKey) {
     const wrap = el('div', { class: 'swatches', role: 'group', 'aria-label': 'CBRE colours' });
     Charts.SWATCHES.forEach((hex) => {
       wrap.appendChild(el('button', {
         type: 'button', class: 'swatch', style: { background: hex }, title: hex,
         'aria-label': `Use ${hex}`, 'aria-pressed': hex.toUpperCase() === String(current).toUpperCase() ? 'true' : 'false',
+        'data-focus-key': `sw:${rowKey}:${hex}`,
         onclick: () => onPick(hex),
       }));
     });
     return wrap;
   }
 
-  function colourRow(name, color, onPick) {
-    const input = el('input', { type: 'color', value: color, 'aria-label': `Colour for ${name}` });
+  function colourRow(name, color, onPick, rowKey) {
+    const input = el('input', { type: 'color', value: color, 'aria-label': `Colour for ${name}`, 'data-focus-key': `ci:${rowKey}` });
     input.addEventListener('input', () => onPick(input.value.toUpperCase(), true));
     input.addEventListener('change', () => onPick(input.value.toUpperCase()));
     return el('div', { class: 'colour-row' },
       input,
       el('span', { class: 'colour-row__name', text: name, title: name }),
-      swatchRow(color, (hex) => onPick(hex)));
+      swatchRow(color, (hex) => onPick(hex), rowKey));
   }
 
   function renderColourList() {
@@ -623,16 +767,16 @@
           state.chart.componentColors[i] = hex;
           state.chart.preset = 'custom';
           afterColourChange(live);
-        }));
+        }, `comp${i}`));
       });
       return;
     }
     state.options.forEach((o) => {
-      list.appendChild(colourRow(o.name || 'Untitled', o.color, (hex, live) => {
+      list.appendChild(colourRow(displayName(o), o.color, (hex, live) => {
         o.color = hex;
         state.chart.preset = 'custom';
         afterColourChange(live);
-      }));
+      }, o.id));
     });
   }
 
@@ -648,7 +792,7 @@
     const note = $('#chart-note');
     const notes = [];
     const invalid = state.options.filter((o) => { const r = results.get(o.id); return r && !r.ok; });
-    if (invalid.length) notes.push(`${invalid.map((o) => o.name).join(', ')} ${invalid.length === 1 ? 'is' : 'are'} left out until the inputs are complete.`);
+    if (invalid.length) notes.push(`${invalid.map(displayName).join(', ')} ${invalid.length === 1 ? 'is' : 'are'} left out until the inputs are complete.`);
     if (series.length === 1) notes.push('Add another option to compare.');
     if (state.chart.layout === 'separate' && Charts.METRICS[state.chart.metric].kind === 'totals') {
       notes.push('Totals compare every option on one chart.');
@@ -671,33 +815,38 @@
     Charts.render(chartArea, series, state.chart, state.settings);
   }
 
+  // Handlers read state.chart at event time: opening a scenario replaces it.
   function bindChartControls() {
-    const c = state.chart;
+    const c = () => state.chart;
     const on = (sel, evt, fn) => $(sel).addEventListener(evt, fn);
     on('#c-metric', 'change', (e) => {
-      c.metric = e.target.value;
-      const types = Charts.typesFor(c.metric);
-      if (!types.includes(c.type)) c.type = types[0];
+      c().metric = pick(e.target.value, CHART_ENUMS.metric, 'monthlyTotal');
+      const types = Charts.typesFor(c().metric);
+      if (!types.includes(c().type)) c().type = types[0];
       update();
     });
-    on('#c-type', 'change', (e) => { c.type = e.target.value; update(); });
-    $$('input[name="c-layout"]').forEach((r) => r.addEventListener('change', () => { if (r.checked) { c.layout = r.value; update(); } }));
-    on('#c-align', 'change', (e) => { c.align = e.target.value; update(); });
-    on('#c-title', 'input', (e) => { c.title = e.target.value; scheduleUpdate(); });
-    on('#c-legend', 'change', (e) => { c.legend = e.target.value; update(); });
-    on('#c-height', 'change', (e) => { c.height = e.target.value; update(); });
-    on('#c-linewidth', 'input', (e) => { c.lineWidth = Number(e.target.value); $('#c-linewidth-out').textContent = `${c.lineWidth}px`; scheduleUpdate(); });
-    on('#c-labels', 'change', (e) => { c.dataLabels = e.target.checked; update(); });
-    on('#c-grid', 'change', (e) => { c.gridlines = e.target.checked; update(); });
-    on('#c-zero', 'change', (e) => { c.beginAtZero = e.target.checked; update(); });
-    on('#c-markers', 'change', (e) => { c.markers = e.target.checked; update(); });
-    on('#c-samescale', 'change', (e) => { c.sameScale = e.target.checked; update(); });
+    on('#c-type', 'change', (e) => { c().type = e.target.value; update(); });
+    $$('input[name="c-layout"]').forEach((r) => r.addEventListener('change', () => { if (r.checked) { c().layout = r.value; update(); } }));
+    on('#c-align', 'change', (e) => { c().align = e.target.value; update(); });
+    on('#c-title', 'input', (e) => { c().title = e.target.value; scheduleUpdate(); });
+    on('#c-legend', 'change', (e) => { c().legend = e.target.value; update(); });
+    on('#c-height', 'change', (e) => { c().height = e.target.value; update(); });
+    on('#c-linewidth', 'input', (e) => {
+      c().lineWidth = Number(e.target.value);
+      $('#c-linewidth-out').textContent = `${c().lineWidth}px`;
+      scheduleUpdate();
+    });
+    on('#c-labels', 'change', (e) => { c().dataLabels = e.target.checked; update(); });
+    on('#c-grid', 'change', (e) => { c().gridlines = e.target.checked; update(); });
+    on('#c-zero', 'change', (e) => { c().beginAtZero = e.target.checked; update(); });
+    on('#c-markers', 'change', (e) => { c().markers = e.target.checked; update(); });
+    on('#c-samescale', 'change', (e) => { c().sameScale = e.target.checked; update(); });
     on('#c-preset', 'change', (e) => {
-      c.preset = e.target.value;
-      const preset = Charts.PRESETS[c.preset];
+      c().preset = e.target.value;
+      const preset = Charts.PRESETS[c().preset];
       if (preset) {
         state.options.forEach((o, i) => { o.color = preset.colors[i % preset.colors.length]; });
-        c.componentColors = preset.colors.slice(0, 3);
+        c().componentColors = preset.colors.slice(0, 3);
       }
       update();
     });
@@ -718,7 +867,7 @@
   function renderSchedule() {
     const sel = $('#s-option');
     sel.textContent = '';
-    state.options.forEach((o) => sel.appendChild(el('option', { value: o.id, text: o.name || 'Untitled' })));
+    state.options.forEach((o) => sel.appendChild(el('option', { value: o.id, text: displayName(o) })));
     if (!state.options.some((o) => o.id === state.schedule.optionId)) state.schedule.optionId = state.activeId;
     sel.value = state.schedule.optionId;
     $$('input[name="s-view"]').forEach((r) => { r.checked = r.value === state.schedule.view; });
@@ -729,7 +878,7 @@
     const r = results.get(opt.id);
     const cur = state.settings.currency, unit = state.settings.areaUnit;
     if (!r || !r.ok) {
-      table.appendChild(el('tbody', null, el('tr', null, el('td', { class: 'cell-invalid', text: `Complete the inputs for ${opt.name} to see its schedule.` }))));
+      table.appendChild(el('tbody', null, el('tr', null, el('td', { class: 'cell-invalid', text: `Complete the inputs for ${displayName(opt)} to see its schedule.` }))));
       return;
     }
     const m = (v) => F.money(v, cur);
@@ -743,9 +892,10 @@
       let cum = 0;
       r.years.forEach((y) => {
         cum += y.total;
+        const months = round2(y.months);
         body.appendChild(el('tr', null,
           el('td', { text: `Year ${y.leaseYear}` }),
-          el('td', { text: F.number(y.months, Number.isInteger(Math.round(y.months * 100) / 100) ? 0 : 2) }),
+          el('td', { text: F.number(months, Number.isInteger(months) ? 0 : 2) }),
           el('td', { text: `${F.date(y.start)} - ${F.date(y.end)}` }),
           el('td', { text: m(y.baseRatePsfYr) }),
           el('td', { text: m(y.baseRent) }),
@@ -772,9 +922,10 @@
     }
     table.appendChild(body);
     const s = r.summary;
+    const termMonths = round2(s.termMonths);
     table.appendChild(el('tfoot', null, el('tr', null,
       el('td', { text: 'Total' }),
-      el('td', { text: annual ? F.number(s.termMonths, Number.isInteger(s.termMonths) ? 0 : 2) : '' }),
+      el('td', { text: annual ? F.number(termMonths, Number.isInteger(termMonths) ? 0 : 2) : '' }),
       el('td', { text: `${F.date(opt.commencement)} - ${F.date(opt.expiration)}` }),
       el('td', { text: '' }),
       el('td', { text: m(s.totalBaseRent) }),
@@ -797,6 +948,7 @@
   }
 
   function update() {
+    const focusKey = currentFocusKey();
     computeAll();
     const opt = activeOption();
     const r = results.get(opt.id);
@@ -808,6 +960,7 @@
     renderCharts();
     renderSchedule();
     persist();
+    restoreFocus(focusKey);
   }
 
   let pending = false;
@@ -815,6 +968,15 @@
     if (pending) return;
     pending = true;
     requestAnimationFrame(() => { pending = false; update(); });
+  }
+
+  // Pushes the whole state into the page (first load and after opening a file).
+  function applyState() {
+    lastSummary = '';
+    syncSettingsInputs();
+    renderUnitLabels();
+    fillForm(activeOption());
+    update();
   }
 
   // --------------------------------------------------- save / open / export
@@ -833,7 +995,10 @@
     toast('Scenario saved. Open it later with Open scenario.');
   });
 
-  $('#file-open').addEventListener('change', (e) => {
+  const fileInput = $('#file-open');
+  $('#btn-open').addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
     if (!file) return;
@@ -842,14 +1007,17 @@
       let next = null;
       try { next = normalizeState(JSON.parse(reader.result)); } catch (err) { next = null; }
       if (!next) { toast('That file is not a lease scenario saved from this calculator.', true); return; }
-      state = next;
-      $('#set-currency').value = state.settings.currency;
-      $('#set-area').value = state.settings.areaUnit;
-      $('#set-discount').value = state.settings.discountRate;
-      renderUnitLabels();
-      fillForm(activeOption());
-      update();
-      toast(`Opened ${file.name}: ${state.options.length} ${state.options.length === 1 ? 'option' : 'options'}.`);
+      const prev = state;
+      try {
+        state = next;
+        applyState();
+        toast(`Opened ${file.name}: ${state.options.length} ${state.options.length === 1 ? 'option' : 'options'}.`);
+      } catch (err) {
+        console.error(err);
+        state = prev;
+        applyState();
+        toast('That scenario could not be opened. Your current options are unchanged.', true);
+      }
     };
     reader.onerror = () => toast('The file could not be read.', true);
     reader.readAsText(file);
@@ -867,7 +1035,7 @@
 
   $('#btn-export').addEventListener('click', async () => {
     const btn = $('#btn-export');
-    const all = state.options.map((o) => ({ input: o, result: results.get(o.id), color: o.color }));
+    const all = state.options.map((o) => ({ input: Object.assign({}, o, { name: displayName(o) }), result: results.get(o.id), color: o.color }));
     const valid = all.filter((e) => e.result && e.result.ok);
     const skipped = all.length - valid.length;
     if (!valid.length) { toast('Complete at least one lease option before exporting.', true); return; }
@@ -899,10 +1067,16 @@
   // -------------------------------------------------------------- init
 
   bindSettings();
-  renderUnitLabels();
   bindChartControls();
-  fillForm(activeOption());
-  update();
+  try {
+    applyState();
+  } catch (err) {
+    console.error(err);
+    state = defaultState();
+    applyState();
+    firstVisit = false;
+    toast('Saved data could not be loaded, so the example options are shown.', true);
+  }
   if (firstVisit) toast('Example options loaded. Replace them with your proposal terms.');
 
   // Exposed for automated checks and the browser console.

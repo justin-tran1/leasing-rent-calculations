@@ -180,3 +180,61 @@ test('month periods anchor to the commencement day', () => {
     ['2026-03-31', '2026-04-29'],
   ]);
 });
+
+// ------------------------------------------------- regressions from review
+
+test('free rent at the end counts full months of rent when the last month is partial', () => {
+  const opts = { baseRate: 12, escalation: 0, opex: 0, commencement: '2026-01-01', expiration: '2031-01-15', freeMonths: 1 };
+  const end = C.calculate(base(Object.assign({ freePlacement: 'end' }, opts)));
+  const start = C.calculate(base(Object.assign({ freePlacement: 'start' }, opts)));
+  close(end.summary.totalFreeRent, -10000);
+  close(start.summary.totalFreeRent, -10000);
+  assert.equal(end.summary.freeMonths, 1);
+  close(end.months[end.months.length - 1].freeFraction, 1);
+  close(end.months[end.months.length - 2].freeFraction, 1 - end.summary.finalMonthProration);
+});
+
+test('fractional terms keep their partial month', () => {
+  assert.equal(C.termMonthsFromInput(24.5, 'months'), 24.5);
+  assert.equal(C.expirationFromTerm('2026-11-01', 24.5), '2028-11-15');
+  close(C.termFromDates('2026-11-01', '2028-11-15').months, 24.5);
+  // Round trip across awkward commencement days and terms.
+  ['2024-01-31', '2024-02-29', '2025-03-30', '2026-11-15', '2026-12-31'].forEach((c) => {
+    [1, 12, 24.5, 60, 66.25, 600].forEach((t) => {
+      const back = C.termFromDates(c, C.expirationFromTerm(c, t)).months;
+      assert.ok(Math.abs(back - t) < 0.04, `${c} + ${t} months came back as ${back}`);
+    });
+  });
+});
+
+test('terms past 50 years are rejected without throwing', () => {
+  assert.equal(C.expirationFromTerm('2026-11-01', C.termMonthsFromInput(300000, 'years')), '');
+  const r = C.calculate(base({ termValue: 300000, termUnit: 'years' }));
+  assert.equal(r.ok, false);
+  assert.match(r.errors.termValue, /50 years/);
+});
+
+test('custom free months accept spaced ranges and must fall inside the term', () => {
+  assert.deepEqual(C.parseMonthList('1 - 3, 13').months, [1, 2, 3, 13]);
+  const r = C.calculate(base({ freePlacement: 'custom', freeCustom: '1-2, 30' }));
+  assert.match(r.errors.freeCustom, /Month 30 falls after the term ends \(24 months\)/);
+  assert.match(C.calculate(base({ freeMonths: 30 })).errors.freeMonths, /longer than the term/);
+});
+
+test('rates and shares outside sensible bounds are flagged', () => {
+  const e = C.validateOption(base({ rateType: 'MG', mgTenantShare: 150, parkingRate: -5, parkingIncrease: -250, escalation: -100, opexIncrease: -100 }));
+  assert.ok(e.mgTenantShare && e.parkingRate && e.parkingIncrease && e.escalation && e.opexIncrease);
+  assert.ok(C.validateOption(base({ rateType: 'MG', mgTenantShare: '' })).mgTenantShare);
+  assert.equal(C.validateOption(base({ escalation: -2 })).escalation, undefined, 'small negative escalations are allowed');
+});
+
+test('net components add up to the total lease cost', () => {
+  const r = C.calculate(base({ freeMonths: 3, freeAppliesTo: 'all', parkingSpaces: 10, parkingRate: 100 }));
+  const s = r.summary;
+  close(s.netBaseRent + s.netOpex + s.netParking, s.totalCost);
+});
+
+test('a negative discount rate is treated as zero', () => {
+  const r = C.calculate(base(), { discountRate: -100 });
+  close(r.summary.npv, r.summary.totalCost);
+});

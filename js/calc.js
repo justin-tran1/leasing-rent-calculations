@@ -97,17 +97,28 @@
     return Math.round((b.getTime() - a.getTime()) / MS_PER_DAY);
   }
 
+  // Term input in months. Fractions are kept (5.5 years = 66 months, 24.5
+  // months = 24 months plus half of the 25th lease month).
   function termMonthsFromInput(value, unit) {
     const v = Number(value);
-    if (!isFinite(v) || v <= 0) return 0;
-    return Math.round(unit === 'years' ? v * 12 : v);
+    if (value === '' || value === null || !isFinite(v) || v <= 0) return 0;
+    return Math.round((unit === 'years' ? v * 12 : v) * 1e4) / 1e4;
   }
 
-  // Expiration is the day before the commencement day, `months` later.
+  // Expiration is the day before the commencement day, `months` later. A
+  // fractional month adds that share of the next lease month's days, so this
+  // is the inverse of termFromDates. Returns '' for terms past the 50-year cap.
   function expirationFromTerm(commencementISO, months) {
     const c = parseDate(commencementISO);
-    if (!c || !(months > 0)) return '';
-    return toISO(addDays(addMonths(c, months, c.getUTCDate()), -1));
+    if (!c || !(months > 0) || months > MAX_TERM_MONTHS) return '';
+    const anchor = c.getUTCDate();
+    const whole = Math.floor(months + 1e-9);
+    const fraction = months - whole;
+    const start = addMonths(c, whole, anchor);
+    let days = 0;
+    if (fraction > 1e-6) days = Math.round(fraction * daysBetween(start, addMonths(c, whole + 1, anchor)));
+    if (whole === 0 && days === 0) days = 1;
+    return toISO(addDays(start, days - 1));
   }
 
   // Term between two dates as whole lease months plus a fraction for a
@@ -139,7 +150,8 @@
   function parseMonthList(text) {
     const months = new Set();
     const errors = [];
-    String(text || '').split(/[,;\s]+/).filter(Boolean).forEach((tok) => {
+    // "1 - 3" and "1-3" are the same range.
+    String(text || '').replace(/\s*-\s*/g, '-').split(/[,;\s]+/).filter(Boolean).forEach((tok) => {
       const range = /^(\d+)\s*-\s*(\d+)$/.exec(tok);
       if (range) {
         const a = +range[1], b = +range[2];
@@ -160,26 +172,53 @@
     return Math.min(100, Math.max(0, num(opt.mgTenantShare))) / 100;
   }
 
+  function blank(v) {
+    return v === '' || v === null || v === undefined || !isFinite(Number(v));
+  }
+
+  // Number of lease months (a partial final month counts as one).
+  function monthCountFromDates(commencementISO, expirationISO) {
+    const t = termFromDates(commencementISO, expirationISO);
+    return t.whole + (t.fraction > 1e-9 ? 1 : 0);
+  }
+
   function validateOption(opt) {
     const errors = {};
     const c = parseDate(opt.commencement), e = parseDate(opt.expiration);
     if (!(num(opt.size) > 0)) errors.size = 'Enter the size of the space.';
     if (!c) errors.commencement = 'Enter a commencement date.';
-    if (!e) errors.expiration = 'Enter an expiration date or a term length.';
-    else if (c && e < c) errors.expiration = 'Expiration must fall after commencement.';
-    else if (c && termFromDates(opt.commencement, opt.expiration).months > MAX_TERM_MONTHS) {
-      errors.expiration = 'Term cannot exceed 50 years.';
+    if (termMonthsFromInput(opt.termValue, opt.termUnit) > MAX_TERM_MONTHS) {
+      errors.termValue = 'Term cannot exceed 50 years (600 months).';
     }
-    if (opt.baseRate === '' || opt.baseRate === null || opt.baseRate === undefined || !isFinite(Number(opt.baseRate))) {
-      errors.baseRate = 'Enter the base rent.';
-    } else if (num(opt.baseRate) < 0) errors.baseRate = 'Base rent cannot be negative.';
+    if (!e) errors.expiration = 'Enter an ending date, or a term length to set one.';
+    else if (c && e < c) errors.expiration = 'The ending date must fall after the commencement date.';
+    else if (c && termFromDates(opt.commencement, opt.expiration).months > MAX_TERM_MONTHS) {
+      errors.expiration = 'Term cannot exceed 50 years (600 months).';
+    }
+    const datesOk = c && e && !errors.expiration;
+    const months = datesOk ? monthCountFromDates(opt.commencement, opt.expiration) : 0;
+
+    if (blank(opt.baseRate)) errors.baseRate = 'Enter the base rent.';
+    else if (num(opt.baseRate) < 0) errors.baseRate = 'Base rent cannot be negative.';
+    if (opt.escalationType !== 'fixed' && num(opt.escalation) <= -100) errors.escalation = 'Escalation must be above -100%.';
     if (num(opt.opex) < 0) errors.opex = 'OpEx cannot be negative.';
-    if (num(opt.freeMonths) < 0) errors.freeMonths = 'Free rent cannot be negative.';
+    if (num(opt.opexIncrease) <= -100) errors.opexIncrease = 'The increase must be above -100%.';
+    if (opt.rateType === 'MG' && (blank(opt.mgTenantShare) || num(opt.mgTenantShare) < 0 || num(opt.mgTenantShare) > 100)) {
+      errors.mgTenantShare = 'Enter a share from 0% to 100%.';
+    }
     if (opt.freePlacement === 'custom') {
       const parsed = parseMonthList(opt.freeCustom);
+      const after = months ? parsed.months.filter((m) => m > months) : [];
       if (parsed.errors.length) errors.freeCustom = `Not a month number: ${parsed.errors.join(', ')}`;
-    }
+      else if (after.length) {
+        const list = after.length > 4 ? `${after.slice(0, 3).join(', ')} and ${after.length - 3} more` : after.join(', ');
+        errors.freeCustom = `${after.length === 1 ? 'Month' : 'Months'} ${list} ${after.length === 1 ? 'falls' : 'fall'} after the term ends (${months} months).`;
+      }
+    } else if (num(opt.freeMonths) < 0) errors.freeMonths = 'Free rent cannot be negative.';
+    else if (months && num(opt.freeMonths) > months) errors.freeMonths = `Free rent is longer than the term (${months} months).`;
     if (num(opt.parkingSpaces) < 0) errors.parkingSpaces = 'Spaces cannot be negative.';
+    if (num(opt.parkingRate) < 0) errors.parkingRate = 'Cost cannot be negative.';
+    if (num(opt.parkingIncrease) <= -100) errors.parkingIncrease = 'The increase must be above -100%.';
     if (num(opt.depositMonths) < 0) errors.depositMonths = 'Months cannot be negative.';
     return errors;
   }
@@ -200,7 +239,12 @@
   }
 
   // Fraction of each lease month (index 0 = month 1) that is abated.
-  function freeRentFractions(opt, monthCount) {
+  // `prorations` holds each month's share of a full month (1 except a partial
+  // final month). Free months are counted in full months of rent, so a free
+  // month placed on a half-length final month also abates half of the month
+  // before it.
+  function freeRentFractions(opt, prorations) {
+    const monthCount = prorations.length;
     const fr = new Array(monthCount).fill(0);
     if (opt.freePlacement === 'custom') {
       parseMonthList(opt.freeCustom).months.forEach((m) => { if (m <= monthCount) fr[m - 1] = 1; });
@@ -210,9 +254,10 @@
     const fromEnd = opt.freePlacement === 'end';
     for (let k = 0; k < monthCount && remaining > 1e-9; k++) {
       const i = fromEnd ? monthCount - 1 - k : k;
-      const f = Math.min(1, remaining);
+      const p = prorations[i] || 1;
+      const f = Math.min(1, remaining / p);
       fr[i] = f;
-      remaining -= f;
+      remaining -= f * p;
     }
     return fr;
   }
@@ -238,7 +283,7 @@
     const errors = validateOption(opt);
     if (Object.keys(errors).length) return { ok: false, errors, months: [], years: [], summary: null };
 
-    const discountRate = num(settings && settings.discountRate, 0) / 100;
+    const discountRate = Math.max(0, num(settings && settings.discountRate, 0)) / 100;
     const c = parseDate(opt.commencement);
     const e = parseDate(opt.expiration);
     const anchor = c.getUTCDate();
@@ -266,7 +311,7 @@
       }
       periods.push({ start, end, proration });
     }
-    const free = freeRentFractions(opt, periods.length);
+    const free = freeRentFractions(opt, periods.map((p) => p.proration));
     const monthlyDiscount = Math.pow(1 + discountRate, 1 / 12);
 
     let cumulative = 0, npv = 0;
@@ -358,7 +403,8 @@
       startingRatePsfYr: months[0].baseRatePsfYr,
       endingRatePsfYr: last.baseRatePsfYr,
       startingMonthlyBase: annualBaseRent(opt, 1) / 12,
-      freeMonths: free.reduce((a, b) => a + b, 0),
+      // Free rent in full months of rent (a partial month counts by its share).
+      freeMonths: Math.round(free.reduce((a, f, i) => a + f * periods[i].proration, 0) * 1e6) / 1e6,
       totalBaseRent: sum('baseRent'),
       totalFreeRent: sum('freeRent'),
       baseAbatement: sum('baseAbatement'),
@@ -367,6 +413,8 @@
       netBaseRent: sum('netBaseRent'),
       totalOpex: sum('opex'),
       totalParking: sum('parking'),
+      netOpex: sum('opex') + sum('opexAbatement'),
+      netParking: sum('parking') + sum('parkingAbatement'),
       totalCost,
       avgMonthlyCost: termMonths > 0 ? totalCost / termMonths : 0,
       avgAnnualCost: termYears > 0 ? totalCost / termYears : 0,
@@ -397,6 +445,7 @@
     parseMonthList,
     tenantOpexShare,
     validateOption,
+    monthCountFromDates,
     annualBaseRent,
     freeRentFractions,
     calculate,

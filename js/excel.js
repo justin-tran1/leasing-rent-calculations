@@ -32,7 +32,8 @@
   };
   const BODY_FONT = 'Arial';
   const HEAD_FONT = 'Georgia';
-  const RESERVED = ['Comparison', 'Monthly comparison', 'Charts'];
+  // Our own sheet names, plus 'History', which Excel reserves.
+  const RESERVED = ['Comparison', 'Monthly comparison', 'Charts', 'History'];
 
   const SCHEDULE_HEADER_ROW = 5;
   const SCHEDULE_COLS = [
@@ -76,9 +77,13 @@
     return `'${sheet.replace(/'/g, "''")}'!${addr}`;
   }
 
+  // Excel sheet names: at most 31 characters, none of []:*?/\, and no
+  // leading or trailing apostrophe. Straight apostrophes become typographic
+  // ones because ExcelJS does not escape them in print-title names, which
+  // makes Excel report the file as damaged.
   function uniqueSheetName(name, used) {
-    let n = String(name || 'Option').replace(/[\[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim();
-    n = n.replace(/^'+|'+$/g, '').slice(0, 31).trim() || 'Option';
+    let n = String(name || 'Option').replace(/[\[\]:*?/\\]/g, ' ').replace(/'/g, '\u2019').replace(/\s+/g, ' ').trim();
+    n = n.slice(0, 31).trim() || 'Option';
     let candidate = n, k = 2;
     while (used.has(candidate.toLowerCase())) {
       const suffix = ` (${k++})`;
@@ -494,7 +499,7 @@
       row++;
     }
     const notes = [
-      'Rate types: NNN passes all OpEx through. Full Service includes OpEx in rent; the tenant pays increases over the base year.',
+      'Rate types: NNN passes all OpEx through. Full Service includes OpEx in rent; where selected, the tenant pays increases over the base year.',
       'Modified Gross: the tenant pays its share of OpEx directly, plus base-year increases on the landlord share where selected.',
       'Escalations and OpEx increases apply on each lease anniversary. Estimates for comparison only; confirm against the lease documents.',
     ];

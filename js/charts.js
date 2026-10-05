@@ -120,11 +120,24 @@
       ctx.lineWidth = 3;
       ctx.strokeStyle = '#FFFFFF';
 
-      const draw = (text, x, y, align, baseline) => {
-        ctx.textAlign = align;
-        ctx.textBaseline = baseline;
-        ctx.strokeText(text, x, y);
-        ctx.fillText(text, x, y);
+      // Each label is a candidate box; a label that would overlap one already
+      // drawn is skipped (the tooltip and the tables still carry the value).
+      const LINE_H = 13;
+      const candidate = (text, x, y, align, baseline) => {
+        const w = ctx.measureText(text).width;
+        const x1 = align === 'center' ? x - w / 2 : align === 'left' ? x : x - w;
+        const y1 = baseline === 'bottom' ? y - LINE_H : baseline === 'middle' ? y - LINE_H / 2 : y;
+        return { text, x, y, align, baseline, box: [x1 - 2, y1 - 1, x1 + w + 2, y1 + LINE_H + 1] };
+      };
+      const overlaps = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+      const placed = [];
+      const draw = (c) => {
+        if (placed.some((p) => overlaps(p, c.box))) return;
+        placed.push(c.box);
+        ctx.textAlign = c.align;
+        ctx.textBaseline = c.baseline;
+        ctx.strokeText(c.text, c.x, c.y);
+        ctx.fillText(c.text, c.x, c.y);
       };
 
       if (opts.stackTotals) {
@@ -139,31 +152,39 @@
             return horizontal ? (el.x > best.x ? el : best) : (el.y < best.y ? el : best);
           }, null);
           if (!tip) continue;
-          if (horizontal) draw(fmt(total), tip.x + 6, tip.y, 'left', 'middle');
-          else draw(fmt(total), tip.x, tip.y - 6, 'center', 'bottom');
+          if (horizontal) draw(candidate(fmt(total), tip.x + 6, tip.y, 'left', 'middle'));
+          else draw(candidate(fmt(total), tip.x, tip.y - 6, 'center', 'bottom'));
         }
         ctx.restore();
         return;
       }
 
-      chart.data.datasets.forEach((ds, di) => {
-        const meta = chart.getDatasetMeta(di);
-        if (meta.hidden) return;
-        const isLine = meta.type === 'line';
-        const points = meta.data;
-        const valued = points.map((el, i) => (ds.data[i] === null || ds.data[i] === undefined ? -1 : i)).filter((i) => i >= 0);
-        if (!valued.length) return;
-        let indices;
-        if (isLine || valued.length > opts.maxBars) indices = [valued[valued.length - 1]];
-        else indices = valued;
-        indices.forEach((i) => {
-          const el = points[i];
-          const v = ds.data[i];
-          if (horizontal) draw(fmt(v), el.x + 6, el.y, 'left', 'middle');
-          else if (isLine) draw(fmt(v), el.x + 6, el.y - 8, 'left', 'bottom');
-          else draw(fmt(v), el.x, el.y - 6, 'center', 'bottom');
+      // Bars get a label each when they all fit without touching; otherwise,
+      // like lines, only the last value of each series is labelled.
+      const build = (endsOnly) => {
+        const out = [];
+        chart.data.datasets.forEach((ds, di) => {
+          const meta = chart.getDatasetMeta(di);
+          if (meta.hidden) return;
+          const isLine = meta.type === 'line';
+          const points = meta.data;
+          const valued = points.map((el, i) => (ds.data[i] === null || ds.data[i] === undefined ? -1 : i)).filter((i) => i >= 0);
+          if (!valued.length) return;
+          const indices = isLine || endsOnly || valued.length > opts.maxBars ? [valued[valued.length - 1]] : valued;
+          indices.forEach((i) => {
+            const el = points[i];
+            const v = ds.data[i];
+            if (horizontal) out.push(candidate(fmt(v), el.x + 6, el.y, 'left', 'middle'));
+            else if (isLine) out.push(candidate(fmt(v), el.x + 6, el.y - 8, 'left', 'bottom'));
+            else out.push(candidate(fmt(v), el.x, el.y - 6, 'center', 'bottom'));
+          });
         });
-      });
+        return out;
+      };
+      let labels = build(false);
+      const crowded = labels.some((a, i) => labels.some((b, j) => j > i && overlaps(a.box, b.box)));
+      if (crowded) labels = build(true);
+      labels.forEach(draw);
       ctx.restore();
     },
   };
@@ -440,14 +461,13 @@
       const lineLike = type === 'line' || type === 'stepped' || type === 'area';
       const ticks = metric.kind === 'monthly' ? lineTicks(shaped.labels, cfg.align, shaped.keys) : null;
       const range = cfg.sameScale !== false ? seriesRange(shaped.series) : null;
+      // Partial lease years are noted per hovered series, using the months
+      // carried on each dataset (correct in combined and separate layouts).
       const footer = metric.kind === 'annual'
-        ? (items) => {
-          const it = items[0];
-          if (!it) return '';
-          const s = shaped.series[it.datasetIndex];
-          const months = s && s.months ? s.months[it.dataIndex] : 12;
-          return months && months < 12 ? `Partial year: ${F.number(months, 1)} months` : '';
-        }
+        ? (items) => items.map((it) => {
+          const months = it.dataset.months ? it.dataset.months[it.dataIndex] : 12;
+          return months && months < 12 - 1e-9 ? `${it.dataset.label}: partial year, ${F.number(months, Number.isInteger(months) ? 0 : 1)} months` : null;
+        }).filter(Boolean)
         : undefined;
       const groups = separate ? shaped.series.map((s) => [s]) : [shaped.series];
       groups.forEach((group) => {
@@ -465,7 +485,7 @@
           title: separate ? `${titleText}: ${group[0].name}` : titleText,
           config: {
             type: lineLike ? 'line' : 'bar',
-            data: { labels: shaped.labels, datasets: group.map((s) => dataset(s, type, cfg)) },
+            data: { labels: shaped.labels, datasets: group.map((s) => Object.assign(dataset(s, type, cfg), { months: s.months })) },
             options,
             plugins: [background, crosshair, directLabels],
           },
@@ -550,7 +570,7 @@
   }
 
   function sumKey(componentKey) {
-    return { netBaseRent: 'netBaseRent', opex: 'totalOpex', parking: 'totalParking' }[componentKey];
+    return { netBaseRent: 'netBaseRent', opex: 'netOpex', parking: 'netParking' }[componentKey];
   }
 
   function defaultTitle(metricKey, unit) {

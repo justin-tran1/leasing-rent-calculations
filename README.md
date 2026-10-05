@@ -20,7 +20,7 @@ The page also runs as-is from any static host, such as GitHub Pages or SharePoin
 |---|---|
 | Option name | Shown on tabs, charts and Excel sheets |
 | Size of the space | SF or SM (set once for all options) |
-| Commencement date, length of term, ending date | Term in months or years. The ending date follows the term; edit the ending date directly for a specific date and the term updates (a partial final month is prorated by days) |
+| Commencement date, length of term, ending date | Term in months or years, fractions allowed (24.5 months, 5.5 years). The ending date follows the term; edit the ending date directly for a specific date and the term updates. A partial final month is prorated by days |
 | Base rent | Per SF per year, per SF per month, total per month or total per year |
 | Rate type | NNN, Modified Gross or Full Service |
 | Annual escalation | % per year (default **3.0%**) or a fixed amount per year |
@@ -37,10 +37,12 @@ Global settings: currency symbol, area unit and the discount rate used for NPV.
 - **NNN:** the tenant pays all OpEx on top of base rent.
 - **Full Service:** OpEx sits inside the rent. With "Tenant pays OpEx increases over the base year" ticked (the default), the tenant pays only the increase over lease year 1.
 - **Modified Gross:** the tenant pays its share of OpEx directly (default 50%). The landlord's share sits inside the rent, and increases on that share over the base year pass through when the base-year box is ticked.
-- **Free rent** abates the chosen charges in full for each free month; half months are allowed (2.5 months abates months 1 and 2 in full and month 3 by half).
+- **Free rent** abates the chosen charges in full for each free month; half months are allowed (2.5 months abates months 1 and 2 in full and month 3 by half). Free months are counted in full months of rent: one free month placed at the end of a term that finishes with a half month abates that half month and half of the month before it. Custom months must fall inside the term.
 - **Security deposit** uses the full, unabated base rent of the first or last lease month.
 - **Effective rent** is the total lease cost divided by size and by term in years.
 - **NPV** discounts each monthly payment, paid in advance, at the annual discount rate converted to a monthly rate.
+
+The calculator flags inputs it cannot use rather than guessing: terms longer than 50 years, free rent longer than the term, a Modified Gross tenant share outside 0%-100%, negative costs, and annual increases of -100% or lower (smaller negative escalations are allowed).
 
 Results are estimates for comparing proposals. Confirm all figures against the lease documents.
 
@@ -53,7 +55,7 @@ Results are estimates for comparing proposals. Confirm all figures against the l
   - `Comparison` sheet with every option side by side and an editable NPV discount rate
   - `Monthly comparison` sheet with each option's rate, net base rent and total cost by lease month
   - `Charts` sheet with the charts as configured on screen
-  - one sheet per option with the monthly schedule, totals, an annual summary, the inputs and the results
+  - one sheet per option with the monthly schedule, totals, an annual summary, the inputs and the results (tabs take the option names, shortened to Excel's 31-character limit)
 
   Totals, annual rows, averages, effective rent and NPV are live Excel formulas, so the workbook stays consistent if a month is edited.
 - **Save scenario / Open scenario** stores every option and chart setting in a `.json` file to reopen or share. The browser also remembers the last session automatically.
@@ -75,13 +77,13 @@ js/app.js           UI state and wiring
 js/logos.js         CBRE logos embedded for the Excel export (generated)
 assets/             CBRE logos
 vendor/             Chart.js and ExcelJS browser builds with licences
-tests/              Node tests for the engine and the Excel export
+tests/              Node tests for the engine, chart configs and the Excel export
 ```
 
 ## Development
 
 ```bash
 npm install
-npm test          # engine and Excel export tests
+npm test          # engine, chart config and Excel export tests
 npm run vendor    # refresh vendor/ and js/logos.js after upgrading Chart.js or ExcelJS
 ```
