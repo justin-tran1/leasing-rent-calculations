@@ -217,7 +217,7 @@ test('terms past 50 years are rejected without throwing', () => {
 test('custom free months accept spaced ranges and must fall inside the term', () => {
   assert.deepEqual(C.parseMonthList('1 - 3, 13').months, [1, 2, 3, 13]);
   const r = C.calculate(base({ freePlacement: 'custom', freeCustom: '1-2, 30' }));
-  assert.match(r.errors.freeCustom, /Month 30 falls after the term ends \(24 months\)/);
+  assert.match(r.errors.freeCustom, /Month 30 falls after the last lease month \(month 24\)/);
   assert.match(C.calculate(base({ freeMonths: 30 })).errors.freeMonths, /longer than the term/);
 });
 
@@ -237,4 +237,20 @@ test('net components add up to the total lease cost', () => {
 test('a negative discount rate is treated as zero', () => {
   const r = C.calculate(base(), { discountRate: -100 });
   close(r.summary.npv, r.summary.totalCost);
+});
+
+test('free rent is checked against the exact term, with plural-aware messages', () => {
+  const frac = base({ commencement: '2026-11-01', expiration: C.expirationFromTerm('2026-11-01', 24.5) });
+  assert.match(C.validateOption(Object.assign({}, frac, { freeMonths: 25 })).freeMonths, /\(24\.50 months\)/);
+  assert.equal(C.validateOption(Object.assign({}, frac, { freeMonths: 24.5 })).freeMonths, undefined);
+  const oneMonth = base({ commencement: '2026-01-01', expiration: '2026-01-31' });
+  assert.match(C.validateOption(Object.assign({}, oneMonth, { freeMonths: 3 })).freeMonths, /\(1 month\)\.$/);
+  assert.match(C.validateOption(Object.assign({}, oneMonth, { freePlacement: 'custom', freeCustom: '2' })).freeCustom,
+    /^Month 2 falls after the last lease month \(month 1\)\.$/);
+});
+
+test('an ending date past the year 9999 is flagged, never garbled', () => {
+  assert.equal(C.expirationFromTerm('9999-12-01', 60), '');
+  const e = C.validateOption(base({ commencement: '9999-12-01', termValue: 5, termUnit: 'years', expiration: '' }));
+  assert.match(e.termValue, /year 9999/);
 });

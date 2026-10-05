@@ -118,7 +118,8 @@
     let days = 0;
     if (fraction > 1e-6) days = Math.round(fraction * daysBetween(start, addMonths(c, whole + 1, anchor)));
     if (whole === 0 && days === 0) days = 1;
-    return toISO(addDays(start, days - 1));
+    const end = addDays(start, days - 1);
+    return end.getUTCFullYear() > 9999 ? '' : toISO(end);
   }
 
   // Term between two dates as whole lease months plus a fraction for a
@@ -182,13 +183,22 @@
     return t.whole + (t.fraction > 1e-9 ? 1 : 0);
   }
 
+  function monthsText(n) {
+    const r = Math.round(n * 100) / 100;
+    const shown = Number.isInteger(r) ? String(r) : r.toFixed(2);
+    return `${shown} ${r === 1 ? 'month' : 'months'}`;
+  }
+
   function validateOption(opt) {
     const errors = {};
     const c = parseDate(opt.commencement), e = parseDate(opt.expiration);
     if (!(num(opt.size) > 0)) errors.size = 'Enter the size of the space.';
     if (!c) errors.commencement = 'Enter a commencement date.';
-    if (termMonthsFromInput(opt.termValue, opt.termUnit) > MAX_TERM_MONTHS) {
+    const termInput = termMonthsFromInput(opt.termValue, opt.termUnit);
+    if (termInput > MAX_TERM_MONTHS) {
       errors.termValue = 'Term cannot exceed 50 years (600 months).';
+    } else if (c && termInput > 0 && !expirationFromTerm(opt.commencement, termInput)) {
+      errors.termValue = 'The ending date would fall after the year 9999.';
     }
     if (!e) errors.expiration = 'Enter an ending date, or a term length to set one.';
     else if (c && e < c) errors.expiration = 'The ending date must fall after the commencement date.';
@@ -196,7 +206,9 @@
       errors.expiration = 'Term cannot exceed 50 years (600 months).';
     }
     const datesOk = c && e && !errors.expiration;
+    // Lease months (a partial final month is a month) and the exact term.
     const months = datesOk ? monthCountFromDates(opt.commencement, opt.expiration) : 0;
+    const termLength = datesOk ? Math.round(termFromDates(opt.commencement, opt.expiration).months * 1e6) / 1e6 : 0;
 
     if (blank(opt.baseRate)) errors.baseRate = 'Enter the base rent.';
     else if (num(opt.baseRate) < 0) errors.baseRate = 'Base rent cannot be negative.';
@@ -212,10 +224,12 @@
       if (parsed.errors.length) errors.freeCustom = `Not a month number: ${parsed.errors.join(', ')}`;
       else if (after.length) {
         const list = after.length > 4 ? `${after.slice(0, 3).join(', ')} and ${after.length - 3} more` : after.join(', ');
-        errors.freeCustom = `${after.length === 1 ? 'Month' : 'Months'} ${list} ${after.length === 1 ? 'falls' : 'fall'} after the term ends (${months} months).`;
+        errors.freeCustom = `${after.length === 1 ? 'Month' : 'Months'} ${list} ${after.length === 1 ? 'falls' : 'fall'} after the last lease month (month ${months}).`;
       }
     } else if (num(opt.freeMonths) < 0) errors.freeMonths = 'Free rent cannot be negative.';
-    else if (months && num(opt.freeMonths) > months) errors.freeMonths = `Free rent is longer than the term (${months} months).`;
+    else if (termLength && num(opt.freeMonths) > termLength + 1e-9) {
+      errors.freeMonths = `Free rent is longer than the term (${monthsText(termLength)}).`;
+    }
     if (num(opt.parkingSpaces) < 0) errors.parkingSpaces = 'Spaces cannot be negative.';
     if (num(opt.parkingRate) < 0) errors.parkingRate = 'Cost cannot be negative.';
     if (num(opt.parkingIncrease) <= -100) errors.parkingIncrease = 'The increase must be above -100%.';

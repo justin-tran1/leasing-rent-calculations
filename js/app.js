@@ -236,7 +236,11 @@
     OPTION_NUMBERS.forEach((k) => { if (k in src) opt[k] = normalizeNumber(src[k]); });
     OPTION_STRINGS.forEach((k) => { if (typeof src[k] === 'string') opt[k] = src[k].slice(0, 200); });
     opt.baseYear = 'baseYear' in src ? !!src.baseYear : d.baseYear;
-    if (!(opt.termMonths > 0)) opt.termMonths = Calc.termMonthsFromInput(opt.termValue, opt.termUnit);
+    if (!(opt.termMonths > 0)) {
+      // Files from before termMonths existed: the saved dates are the truth.
+      const t = Calc.termFromDates(opt.commencement, opt.expiration);
+      opt.termMonths = t.months > 0 ? round4(t.months) : Calc.termMonthsFromInput(opt.termValue, opt.termUnit);
+    }
     if (!Calc.parseDate(opt.expiration)) syncExpiration(opt);
     return opt;
   }
@@ -485,6 +489,12 @@
       r && !r.ok ? el('span', { class: 'tab__warn', text: '!', title: 'Incomplete inputs', 'aria-hidden': 'true' }) : null,
       r && !r.ok ? el('span', { class: 'visually-hidden', text: ' (incomplete inputs)' }) : null));
     });
+    const selectedTab = bar.querySelector('[aria-selected="true"]');
+    if (selectedTab) {
+      const b = bar.getBoundingClientRect(), t = selectedTab.getBoundingClientRect();
+      if (t.left < b.left) bar.scrollLeft -= b.left - t.left + 8;
+      else if (t.right > b.right) bar.scrollLeft += t.right - b.right + 8;
+    }
     const add = $('#btn-add');
     add.disabled = state.options.length >= MAX_OPTIONS;
     add.title = add.disabled ? `Up to ${MAX_OPTIONS} options` : 'Add a lease option';
