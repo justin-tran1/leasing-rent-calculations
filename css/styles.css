@@ -54,6 +54,9 @@ h2 { font-family: var(--font-head); font-weight: 400; font-size: 24px; line-heig
 
 button, input, select { font: inherit; color: inherit; }
 
+/* The hidden attribute always wins over component display rules. */
+[hidden] { display: none !important; }
+
 .visually-hidden {
   position: absolute !important;
   width: 1px; height: 1px;
@@ -97,6 +100,7 @@ button, input, select { font: inherit; color: inherit; }
 .btn--secondary:hover:not(:disabled) { background: var(--tint); }
 .btn--quiet { background: transparent; color: var(--dark-grey); border-color: var(--light-grey); }
 .btn--quiet:hover:not(:disabled) { color: var(--negative); border-color: var(--negative); background: var(--negative-bg); }
+.btn--danger, .btn--danger:hover:not(:disabled) { background: var(--negative); border-color: var(--negative); color: #fff; }
 
 /* ---------------------------------------------------------------- layout */
 

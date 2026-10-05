@@ -108,13 +108,47 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, isError ? 6000 : 4000);
   }
 
-  function download(blob, name) {
+  // Saving files. Opened directly (file:// or any web host), a plain download
+  // link works. Published as a claude.ai artifact, the page runs in a viewer
+  // that blocks page-started downloads; files go through its `downloads`
+  // capability instead, which asks the viewer to confirm each save.
+  const inViewer = !!(window.claude && typeof window.claude.use === 'function');
+  const downloadsReady = inViewer
+    ? Promise.resolve().then(() => window.claude.use('downloads')).catch(() => null)
+    : Promise.resolve(null);
+
+  async function download(blob, name) {
+    if (inViewer) {
+      const api = await downloadsReady;
+      if (!api) {
+        const e = new Error('Saving files is not available in this view.');
+        e.code = 'unavailable';
+        throw e;
+      }
+      await api.save({ filename: name, data: blob });
+      return;
+    }
     const url = URL.createObjectURL(blob);
     const a = el('a', { href: url, download: name });
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  // Toast text for a failed or cancelled save.
+  function saveMessage(err, what) {
+    const code = err && err.code;
+    if (code === 'declined') return `${what} cancelled.`;
+    if (code === 'rate_limited') return 'Answer the open save prompt first, then try again.';
+    return `${what} failed: ${(err && err.message) || 'the file could not be saved'}`;
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: 'image/png' });
   }
 
   function slug(text) {
@@ -334,6 +368,7 @@
     $('#option-panel').setAttribute('aria-labelledby', `tab-${opt.id}`);
     applyVisibility(opt);
     updateOpexNote(opt);
+    if (removeTimer) disarmRemove();
     $('#btn-remove').disabled = state.options.length <= 1;
     $('#btn-duplicate').disabled = state.options.length >= MAX_OPTIONS;
   }
@@ -557,10 +592,28 @@
     toast(`Duplicated ${displayName(from)}.`);
   });
 
+  // Removing takes a second click within 5 seconds. The confirmation lives
+  // in the page because claude.ai viewers have no confirm() dialog.
+  let removeTimer = null;
+  function disarmRemove() {
+    const b = $('#btn-remove');
+    clearTimeout(removeTimer);
+    removeTimer = null;
+    b.textContent = 'Remove option';
+    b.classList.remove('btn--danger');
+  }
+  $('#btn-remove').addEventListener('blur', () => { if (removeTimer) disarmRemove(); });
   $('#btn-remove').addEventListener('click', () => {
     if (state.options.length <= 1) return;
     const opt = activeOption();
-    if (!window.confirm(`Remove ${displayName(opt)}? This cannot be undone.`)) return;
+    if (!removeTimer) {
+      const b = $('#btn-remove');
+      b.textContent = `Click again to remove ${displayName(opt)}`;
+      b.classList.add('btn--danger');
+      removeTimer = setTimeout(disarmRemove, 5000);
+      return;
+    }
+    disarmRemove();
     const idx = state.options.indexOf(opt);
     state.options.splice(idx, 1);
     setActive(state.options[Math.max(0, idx - 1)].id);
@@ -812,7 +865,7 @@
 
     if (!window.Chart) {
       chartArea.textContent = '';
-      chartArea.appendChild(el('div', { class: 'chart-empty', text: 'Charts could not load. Check that vendor/chart.umd.min.js is present.' }));
+      chartArea.appendChild(el('div', { class: 'chart-empty', text: 'Charts could not load. Reload the page to try again.' }));
       return;
     }
     if (!series.length) {
@@ -860,15 +913,19 @@
       }
       update();
     });
-    on('#btn-png', 'click', () => {
+    on('#btn-png', 'click', async () => {
       const shots = Charts.snapshots();
       if (!shots.length) { toast('There is no chart to download yet.', true); return; }
-      shots.forEach((s, i) => {
-        setTimeout(() => {
-          fetch(s.dataUrl).then((r) => r.blob()).then((b) => download(b, `CBRE-${slug(s.title)}.png`))
-            .catch(() => { const a = el('a', { href: s.dataUrl, download: `CBRE-${slug(s.title)}.png` }); a.click(); });
-        }, i * 250);
-      });
+      // One save at a time: in claude.ai each chart waits for the previous prompt.
+      for (const s of shots) {
+        try {
+          await download(dataUrlToBlob(s.dataUrl), `CBRE-${slug(s.title)}.png`);
+        } catch (err) {
+          toast(saveMessage(err, 'Download'), !(err && err.code === 'declined'));
+          return;
+        }
+      }
+      toast(shots.length === 1 ? 'Chart saved.' : `${shots.length} charts saved.`);
     });
   }
 
@@ -1001,8 +1058,9 @@
       chart: state.chart,
     };
     download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
-      `CBRE-lease-scenario-${localISO(new Date())}.json`);
-    toast('Scenario saved. Open it later with Open scenario.');
+      `CBRE-lease-scenario-${localISO(new Date())}.json`)
+      .then(() => toast('Scenario saved. Open it later with Open scenario.'))
+      .catch((err) => toast(saveMessage(err, 'Save'), !(err && err.code === 'declined')));
   });
 
   const fileInput = $('#file-open');
@@ -1062,12 +1120,12 @@
         generatedAt: new Date(),
       });
       const buf = await wb.xlsx.writeBuffer();
-      download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      await download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
         window.LeaseExcel.fileName(new Date()));
       toast(`Excel file ready with ${valid.length} ${valid.length === 1 ? 'option' : 'options'}${skipped ? `. ${skipped} incomplete ${skipped === 1 ? 'option was' : 'options were'} left out` : ''}.`);
     } catch (err) {
       console.error(err);
-      toast(`Export failed: ${err.message}`, true);
+      toast(saveMessage(err, 'Export'), !(err && err.code === 'declined'));
     } finally {
       btn.disabled = false;
       btn.textContent = label;
@@ -1076,6 +1134,10 @@
 
   // -------------------------------------------------------------- init
 
+  // In a claude.ai view that cannot save files, hide the save buttons.
+  downloadsReady.then((api) => {
+    if (inViewer && !api) ['#btn-save', '#btn-export', '#btn-png'].forEach((s) => { $(s).hidden = true; });
+  });
   bindSettings();
   bindChartControls();
   try {
